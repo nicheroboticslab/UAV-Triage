@@ -1,0 +1,23 @@
+# ROS 2
+**/build/
+**/install/
+**/log/
+
+# Python
+**/__pycache__/
+**/*.pyc
+
+# PX4
+**/*.ulg
+**/px4_build/
+
+# Virtual envs
+**/venv/
+**/.env/
+
+# IDE
+**/.vscode/
+
+# OS
+.DS_Store
+
