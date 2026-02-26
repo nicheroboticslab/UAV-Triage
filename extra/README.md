@@ -778,8 +778,8 @@ ls /tmp/uav_dashboard_state.json
 
 | GitHub | Role |
 |--------|------|
-| [@nicheroboticslab](https://github.com/nicheroboticslab) | Primary development & ROS 2 integration |
-| [@BHUVANRJ](https://github.com/BHUVANRJ) | Autonomous architecture & LLM integration |
+| [@OrgAccount](https://github.com) | Primary development & ROS 2 integration |
+| [@PersonalAccount](https://github.com) | Autonomous architecture & LLM integration |
 
 > **Institution:** University of Michigan - Dearborn
 > **Project:** UAV Triage Architecture — Autonomous Systems Research
