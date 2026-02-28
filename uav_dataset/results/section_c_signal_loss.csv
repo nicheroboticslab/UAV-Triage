@@ -1,0 +1,3 @@
+Config,Total Losses,Reentry Decisions,Avg Duration (s),Correct Reentry,Incorrect Reentry,Accuracy %
+Local (8B),5,10,5.0,10,0,100.0
+Pi Edge (1B),5,8,32.962,6,2,75.0

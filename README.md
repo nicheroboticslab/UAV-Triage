@@ -1,13 +1,17 @@
-# 🚁 UAV Autonomous Triage System
+# 🚁 EGLe — Edge-Deployed LLM Autonomy for UAV Triage
 
-> An intelligent UAV system combining **PX4 autopilot**, **ROS 2 Humble**, and a **local LLM (LLaMA3 via Ollama)** for autonomous mission decision-making, battery-aware navigation, signal loss memory, live operator display, and automatic dataset collection for fine-tuning — simulated in **Gazebo** and monitored via **QGroundControl**.
+> **EGLe** *(Edge-deployed Generative Language engine)* is a fully autonomous UAV decision-making framework that deploys a local or edge LLM to reason like a real pilot during communication loss — with full flight memory, signal loss re-entry logic, hard safety gates, live operator dashboard, and automatic research dataset collection.
+>
+> Simulated in **Gazebo** via **PX4 SITL + ROS 2 Humble**. Supports two deployment modes: **Local GCS** (LLaMA3 8B on laptop) and **Raspberry Pi 5 Edge** (LLaMA 3.2 1B over WiFi).
 
 <br>
+
+---
 
 ## 📋 Table of Contents
 
 - [Project Overview](#-project-overview)
-- [What's New — 5-Stage Evolution](#-whats-new--5-stage-evolution)
+- [Hardware Configurations](#️-hardware-configurations)
 - [System Architecture](#-system-architecture)
 - [Prerequisites & Software Stack](#-prerequisites--software-stack)
 - [Installation Guide](#-installation-guide)
@@ -15,14 +19,19 @@
   - [2. PX4 Autopilot + Gazebo SITL](#2-px4-autopilot--gazebo-sitl)
   - [3. Micro XRCE-DDS Agent](#3-micro-xrce-dds-agent)
   - [4. QGroundControl](#4-qgroundcontrol)
-  - [5. Ollama + LLaMA3](#5-ollama--llama3)
-  - [6. Python Dependencies](#6-python-dependencies)
-  - [7. Build the ROS 2 Workspace](#7-build-the-ros-2-workspace)
+  - [5. Ollama + LLaMA3 (Local GCS)](#5-ollama--llama3-local-gcs)
+  - [6. Raspberry Pi 5 Edge Setup](#6-raspberry-pi-5-edge-setup)
+  - [7. Python Dependencies](#7-python-dependencies)
+  - [8. Build the ROS 2 Workspace](#8-build-the-ros-2-workspace)
 - [Running the System](#-running-the-system)
-- [Keyboard Controls & Test Keys](#-keyboard-controls--test-keys)
+  - [Config A — Local GCS](#config-a--local-gcs)
+  - [Config B — Pi 5 Edge](#config-b--raspberry-pi-5-edge)
+- [Keyboard Controls & Test Keys](#️-keyboard-controls--test-keys)
 - [How the LLM Brain Works](#-how-the-llm-brain-works)
-- [Dataset Collection & Fine-Tuning](#-dataset-collection--fine-tuning)
-- [Project Structure](#-project-structure)
+- [5-Stage Evolution](#-5-stage-evolution)
+- [uav\_dataset/ Structure & Log Files](#-uav_dataset-structure--log-files)
+- [Research Results Summary](#-research-results-summary)
+- [Project File Structure](#-project-file-structure)
 - [Troubleshooting](#-troubleshooting)
 - [Contributors](#-contributors)
 
@@ -36,61 +45,35 @@ This project implements a **fully autonomous UAV triage architecture** where the
 
 - Flies manually via keyboard in real-time at 20 Hz
 - Switches to **autonomous mode** after 15 seconds of no keyboard input
-- Uses a **local LLM (LLaMA3)** to think like a real pilot — with flight memory, transparent reasoning, confidence scores, and uncertainty handling
+- Uses a **local or edge LLM** to reason like a real pilot — with flight memory, transparent reasoning, confidence scores, and signal loss handling
 - Visits **all 5 search sectors** in priority order before resetting for a new sweep
 - **Remembers signal loss events** and makes smart re-entry decisions after comms restore
 - Shows a **live operator dashboard** in a second terminal with full LLM reasoning visible
-- **Records every decision** to a dataset file for future fine-tuning
+- **Records every decision** to a `.jsonl` dataset file with full metrics for research analysis
 - Hard safety gate bypasses the LLM entirely for critical battery/EKF states
 
-All simulation runs **100% locally** using PX4 SITL + Gazebo with no cloud dependencies.
+All simulation runs **100% locally** using PX4 SITL + Gazebo. The edge configuration communicates with a Raspberry Pi 5 over WiFi — no cloud required.
 
 <br>
 
 ---
 
-## 🆕 What's New — 5-Stage Evolution
+## ⚙️ Hardware Configurations
 
-This project was built incrementally across 5 stages. Each stage added a layer of intelligence on top of the previous one.
+Two configurations were evaluated for the EGLe paper:
 
-### Stage 1 — Event Log System
-The LLM previously had zero memory of what happened during a flight. Now every significant event is timestamped and logged, and the full flight history is passed to every LLM query. The LLM can see what it already tried and avoid repeating itself.
+| Parameter | Config A — Local GCS | Config B — Pi 5 Edge |
+|-----------|---------------------|----------------------|
+| LLM Model | LLaMA3 8B | LLaMA 3.2 1B |
+| Hardware | Laptop / workstation | Raspberry Pi 5 (16GB RAM) |
+| Inference | `ollama` localhost | `ollama` on Pi over WiFi |
+| Mean latency | 3.241s (σ=0.714) | 52.642s (σ=11.304) |
+| Mean confidence | 82.8% | 90.0% |
+| Network | None (local) | WiFi 10.0.0.0/24 |
+| Cooling required | No | **Yes — heatsink recommended** |
+| Script | `autonomous_uav_final.py` | `autonomous_uav_pi_edge_short.py` |
 
-```
-[T+0s]   System started. Battery: 100%. EKF: 1.00
-[T+15s]  Switched to AUTONOMOUS. No input: 15s.
-[T+89s]  Arrived at SECTOR_A. Battery: 94%.
-[T+110s] LLM (86%): SEARCH_NEXT_PRIORITY → SECTOR_B
-```
-
-### Stage 2 — Pilot Brain Prompt
-Replaced rigid numbered rules with a genuine reasoning prompt. The LLM now returns structured JSON with `intent`, `reasoning`, `confidence`, and `next_checkpoint`. A confidence gate decides whether to execute, warn, or fall back to deterministic safety logic.
-
-```json
-{
-  "intent": 3,
-  "reasoning": "Battery at 67% is healthy. EKF solid at 0.91. SECTOR_A visited. SECTOR_B is next priority.",
-  "confidence": 86,
-  "next_checkpoint": "Complete SECTOR_B or battery drops below 25%"
-}
-```
-
-**Confidence gate:**
-
-| Confidence | Action |
-|------------|--------|
-| ≥ 70% | Execute decision |
-| 50–69% | Execute with warning logged |
-| < 50% | Ignore LLM — use deterministic safe fallback |
-
-### Stage 3 — Signal Loss Memory
-When signal is lost and regained, the LLM gets a full re-entry context block describing how long the signal was gone, battery cost during loss, position drift, what task was interrupted, and whether this is a repeated pattern. The LLM explicitly addresses this before deciding whether to resume or change plan.
-
-### Stage 4 — Live Operator Dashboard
-A standalone `uav_dashboard.py` reads a shared state file written every 0.5s and renders a live terminal display — showing battery bar, EKF status, signal state, full LLM reasoning, confidence level, and the last 8 flight log entries. All updating in real time without scrolling through ROS logs.
-
-### Stage 5 — Dataset Collection & Labeling
-Every LLM decision is automatically recorded to `~/uav_dataset/flight_YYYYMMDD_HHMMSS.jsonl` with full input context, LLM output, and outcome tracking (did the drone arrive? battery on arrival? another signal loss?). A labeling tool lets you review decisions after each flight and export a fine-tuning dataset in Unsloth/SFT format.
+> ⚠️ **Pi 5 Thermal Warning:** Without active cooling, the Pi 5 reaches ~78.5°C during inference (throttle threshold: 80°C). A passive heatsink (~$5–10) is **strongly recommended** for sustained operation.
 
 <br>
 
@@ -117,45 +100,44 @@ Every LLM decision is automatically recorded to `~/uav_dataset/flight_YYYYMMDD_H
                             │ (only if sensors are safe)
 ┌───────────────────────────▼─────────────────────────────────┐
 │                 LLM DECISION ENGINE                         │
-│    Ollama / LLaMA3 8B — thinks like a real pilot            │
-│    Input : battery, EKF, flight log, signal loss context   │
-│    Output: intent + reasoning + confidence + checkpoint     │
-│    Runs in background thread (non-blocking)                 │
-│    Confidence gate: ≥70 execute | 50-69 warn | <50 fallback │
+│  ┌──────────────────────┐  ┌───────────────────────────┐   │
+│  │  CONFIG A (Local)    │  │  CONFIG B (Pi 5 Edge)     │   │
+│  │  LLaMA3 8B           │  │  LLaMA 3.2 1B             │   │
+│  │  ollama localhost    │  │  ollama Pi over WiFi      │   │
+│  │  ~3.2s latency       │  │  ~52.6s latency           │   │
+│  └──────────────────────┘  └───────────────────────────┘   │
+│    Output: intent + reasoning + confidence + checkpoint      │
+│    Confidence gate: ≥70 execute | 50-69 warn | <50 fallback  │
 └───────────────────────────┬─────────────────────────────────┘
                             │
 ┌───────────────────────────▼─────────────────────────────────┐
 │                WAYPOINT GENERATOR                           │
 │    Converts intent → battery-aware [x, y, z]               │
-│    Tracks all visited sectors — visits all 5 before reset  │
-│    HOLD_SAFE = loiter circle r=15m, ω=0.3 rad/s            │
+│    Tracks visited sectors — visits all 5 before reset       │
+│    HOLD_SAFE = loiter circle r=15m, ω=0.3 rad/s             │
 └───────────────────────────┬─────────────────────────────────┘
                             │
 ┌───────────────────────────▼─────────────────────────────────┐
 │               PX4 SITL + GAZEBO                             │
 │       /fmu/in/trajectory_setpoint  @  20 Hz                 │
 └─────────────────────────────────────────────────────────────┘
-         ↑                                        │
-         └──── Feedback: pos, battery, EKF ───────┘
 
 Side outputs (every 0.5s):
   ├── /tmp/uav_dashboard_state.json  →  uav_dashboard.py
-  └── ~/uav_dataset/flight_*.jsonl   →  uav_label_dataset.py
+  └── ~/uav_dataset/flight_*.jsonl   →  research dataset
 ```
 
-### 7 Mission Intents (LLM Output)
+### 7 Mission Intents
 
-| # | Intent | Trigger Condition | Behavior |
-|---|--------|-------------------|----------|
-| 1 | `HOLD_SAFE` | EKF degraded / LLM uncertain | Loiter circle r=15m, ω=0.3 rad/s |
-| 2 | `CONTINUE_ASSIGNED_TASK` | Resume after interruption | Fly back to assigned sector |
-| 3 | `SEARCH_NEXT_PRIORITY` | Default mission | Fly to next **unvisited** sector by priority |
+| # | Intent | Trigger | Behavior |
+|---|--------|---------|----------|
+| 1 | `HOLD_SAFE` | EKF degraded / uncertainty | Loiter circle r=15m, ω=0.3 rad/s |
+| 2 | `CONTINUE_ASSIGNED_TASK` | Resume interrupted transit | Fly back to assigned sector |
+| 3 | `SEARCH_NEXT_PRIORITY` | Default mission | Fly to next unvisited sector |
 | 4 | `INSPECT_TARGET_REPORT` | Unconfirmed target nearby | Confirm nearest victim target |
-| 5 | `COMMS_REACQUIRE` | Signal lost / post-loss re-entry | Fly to [30, 30, -25] comms point |
+| 5 | `COMMS_REACQUIRE` | Signal loss re-entry | Fly to [30, 30, -25] comms point |
 | 6 | `RETURN_TO_BASE` | Battery < 25% | RTB to [0, 0, -5] |
 | 7 | `ABORT_AND_SAFE` | Battery < 15% critical | Emergency land immediately |
-
-> **Hard safety gate:** Intents 6 and 7 are also forced deterministically before the LLM runs when battery is critical. The LLM cannot override these.
 
 ### Search Map
 
@@ -187,208 +169,197 @@ Altitude: NED frame — negative z = UP
 
 ## 🧰 Prerequisites & Software Stack
 
-| Software | Version | Purpose | Official Docs |
-|----------|---------|---------|---------------|
-| **Ubuntu** | 22.04 LTS | Operating System | [ubuntu.com/download](https://ubuntu.com/download/desktop) |
-| **ROS 2 Humble** | Humble Hawksbill | Robot middleware & topic comms | [docs.ros.org/en/humble](https://docs.ros.org/en/humble/Installation.html) |
-| **PX4 Autopilot** | v1.14+ | Flight controller firmware (SITL) | [docs.px4.io](https://docs.px4.io/main/en/dev_setup/dev_env_linux_ubuntu.html) |
-| **Gazebo** | Garden / Harmonic | 3D drone physics simulation | [gazebosim.org/docs](https://gazebosim.org/docs) |
-| **Micro XRCE-DDS Agent** | latest | ROS 2 ↔ PX4 uXRCE bridge over UDP | [github.com/eProsima](https://github.com/eProsima/Micro-XRCE-DDS-Agent) |
-| **QGroundControl** | Stable | Ground control station & telemetry | [qgroundcontrol.com](https://docs.qgroundcontrol.com/master/en/qgc-user-guide/getting_started/download_and_install.html) |
-| **Ollama** | latest | Local LLM runtime (fully offline) | [ollama.com/download](https://ollama.com/download) |
-| **LLaMA3** | llama3:latest (8B) | AI mission decision model | [ollama.com/library/llama3](https://ollama.com/library/llama3) |
-| **Python** | 3.10+ | Main control scripts | [python.org/downloads](https://www.python.org/downloads/) |
-| **px4_msgs** | ROS 2 package | PX4 ROS 2 message definitions | [github.com/PX4/px4_msgs](https://github.com/PX4/px4_msgs) |
-| **px4_ros_com** | ROS 2 package | PX4 ROS 2 bridge utilities | [github.com/PX4/px4_ros_com](https://github.com/PX4/px4_ros_com) |
+| Software | Version | Purpose |
+|----------|---------|---------|
+| **Ubuntu** | 22.04 LTS | Operating System |
+| **ROS 2 Humble** | Humble Hawksbill | Robot middleware & topic comms |
+| **PX4 Autopilot** | v1.14+ | Flight controller firmware (SITL) |
+| **Gazebo** | Garden / Harmonic | 3D drone physics simulation |
+| **Micro XRCE-DDS Agent** | latest | ROS 2 ↔ PX4 uXRCE bridge over UDP |
+| **QGroundControl** | Stable | Ground control station & telemetry |
+| **Ollama** | latest | Local LLM runtime (fully offline) |
+| **Python** | 3.10+ | Node scripts |
+| **Raspberry Pi OS** | Bookworm 64-bit | Pi edge node OS (Config B only) |
 
 <br>
 
 ---
 
-## 📦 Installation Guide
+## 🔧 Installation Guide
 
 ### 1. ROS 2 Humble
 
-> 📖 Official docs: https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html
-
 ```bash
-# Set locale
-sudo apt update && sudo apt install -y locales
+sudo apt update && sudo apt install locales -y
 sudo locale-gen en_US en_US.UTF-8
 sudo update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
-export LANG=en_US.UTF-8
 
-# Add ROS 2 apt repository
-sudo apt install -y software-properties-common curl
+sudo apt install software-properties-common curl -y
+sudo add-apt-repository universe
 sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
   -o /usr/share/keyrings/ros-archive-keyring.gpg
-
 echo "deb [arch=$(dpkg --print-architecture) \
   signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] \
   http://packages.ros.org/ros2/ubuntu \
-  $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | \
-  sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
+  $(. /etc/os-release && echo $UBUNTU_CODENAME) main" \
+  | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
 
-# Install ROS 2 Humble Desktop
-sudo apt update && sudo apt upgrade -y
-sudo apt install -y ros-humble-desktop
-
-# Install colcon build tools
-sudo apt install -y python3-colcon-common-extensions python3-rosdep
-
-# Initialize rosdep
-sudo rosdep init && rosdep update
+sudo apt update && sudo apt install ros-humble-desktop \
+  python3-colcon-common-extensions -y
+echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc
+source ~/.bashrc
 ```
-
-**Verify:**
-```bash
-source /opt/ros/humble/setup.bash
-ros2 --version
-# Expected: ros2 cli version X.X.X (humble)
-```
-
----
 
 ### 2. PX4 Autopilot + Gazebo SITL
 
-> 📖 Official docs: https://docs.px4.io/main/en/dev_setup/dev_env_linux_ubuntu.html
-
 ```bash
-# Clone PX4 with all submodules (~2.5 GB)
-git clone https://github.com/PX4/PX4-Autopilot.git --recursive
-cd PX4-Autopilot
-
-# Run the official Ubuntu setup script
-# Installs all toolchains, Gazebo, and dependencies automatically
-bash ./Tools/setup/ubuntu.sh
-
-# Reboot after setup to apply udev rules
-sudo reboot
-```
-
-**Verify — test launch with X500 quadrotor:**
-```bash
+git clone https://github.com/PX4/PX4-Autopilot.git --recursive ~/PX4-Autopilot
 cd ~/PX4-Autopilot
-make px4_sitl gz_x500
-# ✅ Gazebo should open with X500 drone
-# ✅ PX4 console shows: INFO [commander] Ready for takeoff!
-# Press Ctrl+C to stop
+bash ./Tools/setup/ubuntu.sh
+pip install --user -r Tools/setup/requirements.txt
+make px4_sitl gz_x500   # First build takes ~10 min
 ```
-
----
 
 ### 3. Micro XRCE-DDS Agent
 
-> The **critical bridge** between PX4 and ROS 2. Without it, no `/fmu/` topics appear in ROS 2.
->
-> 📖 Official docs: https://micro-xrce-dds.docs.eprosima.com/en/latest/
-
 ```bash
-# Install build dependencies
-sudo apt install -y cmake g++ python3-pip git
-
-# Clone and build from source
-cd ~
 git clone https://github.com/eProsima/Micro-XRCE-DDS-Agent.git
-cd Micro-XRCE-DDS-Agent
-mkdir build && cd build
-cmake ..
-make -j$(nproc)
+cd Micro-XRCE-DDS-Agent && mkdir build && cd build
+cmake .. && make
 sudo make install
 sudo ldconfig /usr/local/lib/
 ```
 
-**Verify:**
-```bash
-MicroXRCEAgent --help
-# Expected: Usage: MicroXRCEAgent <transport> [options]
-```
-
----
-
 ### 4. QGroundControl
 
-> 📖 Official docs: https://docs.qgroundcontrol.com/master/en/qgc-user-guide/getting_started/download_and_install.html
-
 ```bash
-# Install required system libraries
-sudo apt install -y libfuse2 libxcb-xinerama0 libxkbcommon-x11-0
-
-# Download AppImage to home directory
-cd ~
-wget https://d176tv9ibo4jno.cloudfront.net/latest/QGroundControl-x86_64.AppImage
-
-# Make it executable
-chmod +x ~/QGroundControl-x86_64.AppImage
+sudo usermod -a -G dialout $USER
+sudo apt-get remove modemmanager -y
+sudo apt install gstreamer1.0-plugins-bad gstreamer1.0-libav \
+  gstreamer1.0-gl libfuse2 libxcb-xinerama0 libxkbcommon-x11-0 -y
+# Download AppImage from https://docs.qgroundcontrol.com
+chmod +x QGroundControl.AppImage && ./QGroundControl.AppImage
 ```
 
-**Verify:**
+### 5. Ollama + LLaMA3 (Local GCS)
+
 ```bash
-~/QGroundControl-x86_64.AppImage
-# ✅ QGC window opens and auto-connects to simulation on localhost:14550
-```
-
----
-
-### 5. Ollama + LLaMA3
-
-> This project uses **Ollama** to run LLaMA3 **entirely offline** — no API keys, no internet during flight.
->
-> 📖 Ollama install: https://ollama.com/download
-> 📖 LLaMA3 model: https://ollama.com/library/llama3
-
-**Install Ollama:**
-```bash
+# Install Ollama
 curl -fsSL https://ollama.com/install.sh | sh
+
+# Pull both models
+ollama pull llama3          # Config A — 8B model
+ollama pull llama3.2:1b     # Config B — also used on Pi
+
+# Test
+curl http://localhost:11434/api/generate \
+  -d '{"model":"llama3","prompt":"Say READY","stream":false}'
 ```
 
-**Verify Ollama is installed:**
+### 6. Raspberry Pi 5 Edge Setup
+
+> **Requirements:** Raspberry Pi 5 (8GB or 16GB RAM), Raspberry Pi OS Bookworm 64-bit, 27W USB-C PSU, passive heatsink recommended.
+
+#### 6a. Install Ollama on Pi
+
 ```bash
-ollama --version
-# Expected: ollama version 0.x.x
+# SSH into Pi
+ssh <user>@<pi-ip>
+
+# Install Ollama
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Pull 1B model (takes ~5 min on Pi)
+ollama pull llama3.2:1b
+
+# Test
+curl http://localhost:11434/api/generate \
+  -d '{"model":"llama3.2:1b","prompt":"Say READY","stream":false}'
 ```
 
-**Pull the exact LLaMA3 model used in this project:**
+#### 6b. Expose Ollama over WiFi network
+
 ```bash
-# One-time download ~4.7 GB
-ollama pull llama3
+# Create systemd override to bind on all interfaces
+sudo mkdir -p /etc/systemd/system/ollama.service.d/
+sudo nano /etc/systemd/system/ollama.service.d/override.conf
 ```
 
-**Verify the model works:**
-```bash
-ollama run llama3 "Reply with the word READY only."
-# Expected output: READY
+Paste the following:
+
+```ini
+[Service]
+Environment="OLLAMA_HOST=0.0.0.0:11434"
+Environment="OLLAMA_NUM_PARALLEL=1"
+Environment="OLLAMA_NUM_THREADS=2"
+Environment="OLLAMA_KEEP_ALIVE=30s"
+CPUQuota=200%
 ```
 
----
-
-### 6. Python Dependencies
-
 ```bash
-pip install pynput --break-system-packages
+sudo systemctl daemon-reload
+sudo systemctl restart ollama
+
+# Verify from laptop — should return model list
+curl http://<pi-ip>:11434/api/tags
 ```
 
-> `curses` is part of the Python standard library — no install needed for the dashboard.
+> **Why `CPUQuota=200%` + `OLLAMA_NUM_THREADS=2`?**
+> Limits inference to 2 CPU cores maximum. Without this the Pi 5 draws excessive current from USB-C chargers causing brownouts, and peak temperature is reduced from ~80°C to ~70°C.
 
----
-
-### 7. Build the ROS 2 Workspace
+#### 6c. Find Pi IP address
 
 ```bash
-cd ~/ros_ws
+# On Pi
+hostname -I
+
+# Or from laptop
+arp -a | grep -i raspberry
+ping raspberrypi.local
+```
+
+#### 6d. Set Pi IP in edge script
+
+```bash
+nano ~/UAV-Triage/ros_ws/src/uav_control/uav_control/autonomous_uav_pi_edge_short.py
+# Find line: PI_OLLAMA_URL = "http://10.0.0.119:11434/api/generate"
+# Replace 10.0.0.119 with your Pi's IP
+```
+
+#### 6e. Pi Hardware Monitor (run during every experiment)
+
+```bash
+# SSH into Pi in a separate terminal and run this BEFORE starting the UAV script
+# Leave it running the entire session — it auto-saves to ~/pi_hardware_log_*.txt
+while true; do
+  echo "$(date) | CPU: $(top -bn1 | grep 'Cpu(s)' | awk '{print $2}')% | \
+RAM: $(free -m | awk 'NR==2{printf "%s/%s MB", $3,$2}') | \
+TEMP: $(vcgencmd measure_temp)"
+  sleep 5
+done | tee ~/pi_hardware_log_$(date +%Y%m%d_%H%M%S).txt
+```
+
+Pull logs to laptop after experiments:
+
+```bash
+scp <user>@<pi-ip>:~/pi_hardware_log_*.txt ~/uav_dataset/
+```
+
+### 7. Python Dependencies
+
+```bash
+pip3 install --break-system-packages rclpy numpy
+# No extra packages needed — edge script uses only Python stdlib (urllib, json)
+```
+
+### 8. Build the ROS 2 Workspace
+
+```bash
+cd ~/UAV-Triage/ros_ws
 rosdep install --from-paths src --ignore-src -r -y
 colcon build --symlink-install
 source install/local_setup.bash
-```
-
-**Verify:**
-```bash
-ros2 pkg list | grep -E "px4_msgs|px4_ros_com|px4_offboard|uav_control"
-# Expected:
-# px4_msgs
-# px4_offboard
-# px4_ros_com
-# uav_control
+echo "source ~/UAV-Triage/ros_ws/install/local_setup.bash" >> ~/.bashrc
 ```
 
 <br>
@@ -397,89 +368,106 @@ ros2 pkg list | grep -E "px4_msgs|px4_ros_com|px4_offboard|uav_control"
 
 ## 🚀 Running the System
 
-Open **4 separate terminals**. Run each **in order** — sequence matters.
+> **Golden rule — always start in this order:**
+> `Pi Ollama (if edge) → DDS Bridge → PX4/Gazebo → UAV Script → Dashboard`
 
 ---
 
-### Terminal 1 — Micro XRCE-DDS Agent (Start First)
+### Config A — Local GCS
 
+Open **4 terminals** on your laptop:
+
+**Terminal 1 — DDS Bridge**
 ```bash
-cd ~/Micro-XRCE-DDS-Agent/build
 MicroXRCEAgent udp4 -p 8888
 ```
 
-> Bridges PX4 uORB topics → ROS 2 over UDP port 8888.
-> Keep this running. Connection logs appear once PX4 starts.
-
----
-
-### Terminal 2 — PX4 SITL + Gazebo
-
+**Terminal 2 — PX4 + Gazebo**
 ```bash
 cd ~/PX4-Autopilot
 make px4_sitl gz_x500
+# Wait for: INFO [commander] Ready for takeoff!
 ```
 
-> Launches X500 quadrotor in Gazebo. Wait until you see:
-> ```
-> INFO  [commander] Ready for takeoff!
-> ```
-
----
-
-### Terminal 3 — Main Control Node
-
+**Terminal 3 — UAV Autonomous Node**
 ```bash
-cd ~/ros_ws
 source /opt/ros/humble/setup.bash
-source install/local_setup.bash
-python3 autonomous_uav_final.py
+source ~/UAV-Triage/ros_ws/install/local_setup.bash
+cd ~/UAV-Triage/ros_ws
+python3 src/uav_control/uav_control/autonomous_uav_final.py
 ```
 
-> Drone arms and takes off automatically.
-> Fly manually with keyboard arrows.
-> After **15s of no input** → LLM takes autonomous control and begins visiting all 5 sectors in priority order.
+**Terminal 4 — Live Dashboard (optional)**
+```bash
+source /opt/ros/humble/setup.bash
+source ~/UAV-Triage/ros_ws/install/local_setup.bash
+python3 ~/UAV-Triage/ros_ws/src/uav_control/uav_control/uav_dashboard.py
+```
 
 ---
 
-### Terminal 4 — Live Operator Dashboard
+### Config B — Raspberry Pi 5 Edge
 
+**Step 1 — Verify Pi before starting**
 ```bash
-python3 uav_dashboard.py
+# From laptop
+ping <pi-ip>
+ssh <user>@<pi-ip> "systemctl is-active ollama && vcgencmd measure_temp"
+# Must show: active  AND  temp below 45°C before first run
 ```
 
-> Shows battery bar, EKF, signal status, full LLM reasoning, confidence, and flight log — all live.
-> Press `Q` to close. Drone keeps flying.
-
----
-
-### After Flight — Label Dataset
-
+**Step 2 — Pi SSH Terminal — Start hardware monitor**
 ```bash
-python3 uav_label_dataset.py
+# SSH into Pi — leave this running the entire experiment
+while true; do
+  echo "$(date) | CPU: $(top -bn1 | grep 'Cpu(s)' | awk '{print $2}')% | \
+RAM: $(free -m | awk 'NR==2{printf "%s/%s MB", $3,$2}') | \
+TEMP: $(vcgencmd measure_temp)"
+  sleep 5
+done | tee ~/pi_hardware_log_$(date +%Y%m%d_%H%M%S).txt
 ```
 
-> Reviews each LLM decision. Mark correct/wrong, write better reasoning. Export as fine-tuning data.
-
----
-
-### ✅ Quick-Start (Copy-Paste)
-
+**Terminal 1 — DDS Bridge**
 ```bash
-# Terminal 1 — DDS Bridge
-cd ~/Micro-XRCE-DDS-Agent/build && MicroXRCEAgent udp4 -p 8888
+MicroXRCEAgent udp4 -p 8888
+```
 
-# Terminal 2 — PX4 + Gazebo
+**Terminal 2 — PX4 + Gazebo**
+```bash
 cd ~/PX4-Autopilot && make px4_sitl gz_x500
-
-# Terminal 3 — Main Control Node
-cd ~/ros_ws && source /opt/ros/humble/setup.bash && source install/local_setup.bash && python3 autonomous_uav_final.py
-
-# Terminal 4 — Dashboard
-python3 uav_dashboard.py
 ```
 
-> ⚠️ **Always start in order: T1 → T2 → T3 → T4**
+**Terminal 3 — UAV Edge Node**
+```bash
+source /opt/ros/humble/setup.bash
+source ~/UAV-Triage/ros_ws/install/local_setup.bash
+cd ~/UAV-Triage/ros_ws
+python3 src/uav_control/uav_control/autonomous_uav_pi_edge_short.py
+```
+
+**Between each run — wait for Pi to cool**
+```bash
+ssh <user>@<pi-ip> "vcgencmd measure_temp"
+# Wait until temp < 45°C before starting next run
+```
+
+---
+
+### Expected Terminal Output
+
+```
+[LOG] ARM command sent.
+[LOG] Switched to AUTONOMOUS. No input: 15s.
+[LLM] 🧠 Thinking...
+[EDGE] Pi inference | model=llama3.2:1b | prompt_tokens=538 |
+       output_tokens=46 | inference=13.84s | tok/s=3.3 | network_rtt=51.88s
+╔══════════════════════════════════════════════════════════╗
+║  🧠 PILOT BRAIN DECISION                                 ║
+║  Intent    : [3] SEARCH_NEXT_PRIORITY                    ║
+║  Target    : SECTOR_A                                    ║
+║  Confidence: 90%  ✅ HIGH                                ║
+╚══════════════════════════════════════════════════════════╝
+```
 
 <br>
 
@@ -487,31 +475,20 @@ python3 uav_dashboard.py
 
 ## ⌨️ Keyboard Controls & Test Keys
 
-### Manual Flight Controls
+| Key | Action | Notes |
+|-----|--------|-------|
+| `W/A/S/D` | Manual flight | Cancels autonomous mode timer |
+| `Space` | Land | Emergency stop |
+| `Z` | Simulate 5s signal loss | Tests re-entry logic |
+| `T` | Force EKF → 0.2 (critical) | Tests safety gate — HOLD_SAFE fires |
+| `Y` | Force Battery → 10% (critical) | Tests safety gate — RTB fires |
+| `R` | Reset T/Y overrides | Restores normal sensor values |
+| `F` | Force immediate LLM re-query | Skips dwell timer |
+| `1–7` | Force specific intent | Manual intent injection |
+| `H` | Show dataset stats | Decisions recorded this session |
+| `Q` | Quit | Exits cleanly |
 
-| Key | Action |
-|-----|--------|
-| `↑` | Move forward (North) |
-| `↓` | Move backward (South) |
-| `←` | Move left (West) |
-| `→` | Move right (East) |
-| `W` | Climb (increase altitude) |
-| `S` | Descend (decrease altitude) |
-
-### Developer Test Keys
-
-| Key | Action | What Happens |
-|-----|--------|--------------|
-| `T` | Force EKF → 0.2 **(locked)** | Safety gate fires instantly → HOLD_SAFE loiter. LLM skipped. Stays locked until `R`. |
-| `Y` | Force Battery → 10% **(locked)** | Safety gate fires instantly → RTB. LLM skipped. Stays locked until `R`. |
-| `R` | Reset both to normal | Releases `T` and `Y` locks. Sensors read from PX4 again. |
-| `Z` | Simulate 5s signal loss | Tests full signal loss → regain → re-entry LLM decision flow. |
-| `F` | Force LLM re-query now | Skips 30s cooldown — immediate new decision. |
-| `H` | Show mission stats | Prints dataset count, visited sectors, remaining sectors. |
-| `B` | Show battery status | Prints voltage, current, and percentage. |
-| `1`–`7` | Force specific intent | Bypasses LLM entirely — directly activates that intent. |
-
-> **Note on T and Y:** Overrides are **locked** until you press `R`. The ROS sensor callbacks are blocked from reading real PX4 values while the lock is active. You will see `[EKF_OVR]` or `[BATT_OVR]` in the status line confirming the lock. This ensures the forced value holds stable across multiple LLM queries.
+> **Testing safety gates:** Press `T` or `Y` → confirm `[SAFETY] gate fired` in logs → press `R` to restore. LLM is bypassed — gate fires in <1ms.
 
 <br>
 
@@ -519,184 +496,266 @@ python3 uav_dashboard.py
 
 ## 🧠 How the LLM Brain Works
 
-### Decision Flow
+### Compressed Prompt (edge config, ~380 tokens)
 
 ```
-Every 30s or on trigger event:
+UAV pilot brain. Operator unavailable. Decide next action.
 
-1. trigger_llm() called
-         │
-         ▼
-2. Hard safety gate:
-   Battery < 15%?  →  RTB immediately  (LLM skipped entirely)
-   EKF < 0.4?      →  HOLD_SAFE immediately  (LLM skipped entirely)
-         │
-         ▼  (only if sensors are within safe limits)
-3. Background thread starts — main loop keeps running at 20Hz
-   Full input snapshot taken before query begins
-         │
-         ▼
-4. Prompt sent to Ollama (llama3):
-   Includes battery, EKF, full flight log, all sector visit
-   status (✅ VISITED / ⬜ NOT YET VISITED), signal loss
-   context block if a loss just occurred
-         │
-         ▼
-5. LLM responds with JSON:
-   {"intent":3, "reasoning":"...", "confidence":86, "next_checkpoint":"..."}
-         │
-         ▼
-6. Confidence gate applied:
-   ≥ 70%  →  execute
-   50-69% →  execute with warning logged
-   < 50%  →  ignore LLM, use deterministic safe fallback
-         │
-         ▼
-7. Waypoint generated, drone flies
-   Decision recorded to dataset file
+STATE: pos=[12.3, -4.1, -10.0] batt=50%(GOOD) ekf=0.80(GOOD) wp=SECTOR_A
+LOG(last 5):
+  [T+1m21s] Arrived at SECTOR_A. Battery: 50.0%
+  [T+0m15s] Switched to AUTONOMOUS
+
+MISSION: visited=[SECTOR_A] remaining=[SECTOR_B,SECTOR_C,SECTOR_D,SECTOR_E]
+
+ACTIONS:
+1=HOLD_SAFE 2=CONTINUE_ASSIGNED_TASK 3=SEARCH_NEXT_PRIORITY
+4=INSPECT_TARGET 5=COMMS_REACQUIRE 6=RETURN_TO_BASE 7=ABORT
+
+RULES: batt<25%→RTB, batt<15%→ABORT, ekf<0.4→no far flight, safety first.
+
+Reply ONLY valid JSON:
+{"intent":<1-7>,"reasoning":"<brief>","confidence":<0-100>,"next_checkpoint":"<when>"}
 ```
 
-### Sector Visiting Logic
+### Output JSON
 
-The drone uses a `visited_sectors` **set** to track all visited sectors. A sector is only marked visited when the drone **physically arrives** — not when the decision is made. If the drone is interrupted mid-flight, it retries that sector. When all 5 are done the set resets and a new sweep begins automatically.
-
-```
-Sweep 1:  A → B → C → D → E → [all done, reset]
-Sweep 2:  A → B → C → D → E → [reset again]
-```
-
-### Signal Loss Re-Entry
-
-When signal is regained after a loss, the LLM gets a dedicated context block injected into its prompt:
-
-```
-=== SIGNAL LOSS EVENT — ADDRESS THIS BEFORE DECIDING ===
-  Lost for         : 8.2s
-  Battery cost     : 2.1% — negligible
-  Position drift   : 1.4m — minimal
-  EKF at regain    : 0.88 — GOOD
-  Loss #           : 1 this flight
-  Interrupted task : SEARCH_NEXT_PRIORITY → SECTOR_B
-Consider: Is it safe to resume? Is the drift acceptable?
+```json
+{
+  "intent": 3,
+  "reasoning": "Battery 50% healthy. EKF 0.80 solid. SECTOR_A visited. SECTOR_B is next priority.",
+  "confidence": 90,
+  "next_checkpoint": "Arrive SECTOR_B or battery drops below 25%"
+}
 ```
 
-The LLM explicitly addresses this before deciding whether to resume the interrupted task or change plan. If this is the 2nd+ loss a pattern warning is added.
+### Confidence Gate
+
+| Confidence | Action |
+|------------|--------|
+| ≥ 70% | Execute decision ✅ |
+| 50–69% | Execute with warning logged ⚠️ |
+| < 50% | Ignore — use `HOLD_SAFE` fallback ❌ |
+
+### Hard Safety Gate (runs before LLM, always)
+
+| Condition | Action | LLM Called? |
+|-----------|--------|-------------|
+| Battery < 15% | Force `ABORT_AND_SAFE` | No |
+| Battery < 25% | Force `RETURN_TO_BASE` | No |
+| EKF < 0.4 | Force `HOLD_SAFE` | No |
+| All clear | Normal LLM query | Yes |
 
 <br>
 
 ---
 
-## 📊 Dataset Collection & Fine-Tuning
+## 🆕 5-Stage Evolution
 
-Every flight automatically records decisions to `~/uav_dataset/`. One file per session named by timestamp.
+### Stage 1 — Event Log System
+Every significant event is timestamped and passed to every LLM query, giving the model full flight memory to avoid repeating decisions.
 
-### What Gets Recorded Per Decision
+### Stage 2 — Pilot Brain Prompt
+Replaced rigid rules with a genuine reasoning prompt. Structured JSON output with `intent`, `reasoning`, `confidence`, `next_checkpoint`. Confidence gate decides execute, warn, or fallback.
+
+### Stage 3 — Signal Loss Memory
+Re-entry context block encodes loss duration, battery cost, position drift, and pre-loss intent — enabling smart post-outage reasoning.
+
+### Stage 4 — Live Operator Dashboard
+`uav_dashboard.py` renders a live terminal display with battery bar, EKF status, full LLM reasoning, and last 8 log entries — all updating in real time.
+
+### Stage 5 — Dataset Collection
+Every LLM decision recorded to `.jsonl` with full input, output, edge metrics, and outcome tracking for research analysis and fine-tuning.
+
+<br>
+
+---
+
+## 📁 uav\_dataset/ Structure & Log Files
+
+```
+uav_dataset/
+│
+├── flight_YYYYMMDD_HHMMSS.jsonl          # One file per flight session
+│                                          # Auto-created on first decision
+│                                          # Local config:  ~12 decisions/run
+│                                          # Edge config:   ~5  decisions/run
+│
+├── local_runs/                            # Config A runs (Local GCS)
+│   └── flight_202602280302xx.jsonl       # 5 sessions × 12 decisions = 60 total
+│
+├── run_YYYYMMDD_HHMMSS_local_terminal.log # Full terminal output — local runs
+│                                          # Contains: LLM responses, safety gate
+│                                          # events, JSON failures, status lines
+│
+├── run_YYYYMMDD_HHMMSS_edge_terminal.log  # Full terminal output — edge runs
+│                                          # Contains: [EDGE] inference metrics,
+│                                          # timeout events, Pi RTT per query
+│
+├── pi_hardware_log_YYYYMMDD_HHMMSS.txt   # Raspberry Pi hardware monitor
+│                                          # Sampled every 5s during flights
+│                                          # Format: DATE | CPU: X% |
+│                                          #         RAM: X/X MB | TEMP: X°C
+│                                          # Used for: Section E paper metrics
+│
+├── analyze_paper_data.py                  # Research analysis script
+│                                          # Reads all .jsonl + pi_hardware logs
+│                                          # Outputs latency stats, intent dist,
+│                                          # signal loss accuracy, LaTeX tables
+│
+└── results/                               # Analysis outputs
+    ├── section_a_llm_performance.csv
+    ├── section_b_intent_distribution.csv
+    ├── section_c_signal_loss.csv
+    ├── section_d_safety_gate.csv
+    ├── latex_tables.tex                   # Paste directly into Overleaf
+    └── final_analysis_YYYYMMDD.txt        # Full printed analysis output
+```
+
+### JSONL Decision Record Schema
+
+Every line in a `flight_*.jsonl` file is one decision:
 
 ```json
 {
-  "id": "flight_20260221_143022_003",
+  "id": "uuid",
+  "timestamp": "2026-02-28T03:02:27",
+  "flight_time_s": 89.4,
   "input": {
-    "battery_pct": 67.3,
-    "ekf_confidence": 0.91,
-    "sectors_visited": ["SECTOR_A"],
-    "sectors_remaining": ["SECTOR_B", "SECTOR_C", "SECTOR_D", "SECTOR_E"],
-    "post_signal_loss_reentry": true,
-    "event_log_at_decision": ["[T+89s] Arrived SECTOR_A", "..."],
-    "last_loss_duration_s": 8.2,
-    "last_loss_battery_cost": 2.1
+    "battery_pct": 50.0,
+    "ekf_confidence": 0.80,
+    "current_pos": [12.3, -4.1, -10.0],
+    "visited_sectors": ["SECTOR_A"],
+    "signal_loss_count": 1,
+    "post_signal_loss_reentry": false,
+    "last_loss_duration_s": 5.0,
+    "pre_loss_intent": "SEARCH_NEXT_PRIORITY",
+    "event_log_at_decision": ["[T+89s] Arrived SECTOR_A. Battery: 50%"]
   },
   "llm_output": {
     "intent": 3,
     "intent_name": "SEARCH_NEXT_PRIORITY",
-    "reasoning": "Battery healthy. Signal loss brief. Resume search.",
-    "confidence": 86,
-    "response_time_seconds": 4.2,
+    "reasoning": "Battery healthy. Resume search.",
+    "confidence": 90,
+    "response_time_seconds": 3.24,
     "fallback_used": false,
-    "was_reentry_decision": true
+    "was_reentry_decision": false
+  },
+  "edge_metrics": {
+    "pi_ip": "10.0.0.119",
+    "model": "llama3.2:1b",
+    "prompt_tokens": 538,
+    "output_tokens": 46,
+    "inference_time_s": 13.84,
+    "tokens_per_sec": 3.3,
+    "network_rtt_s": 51.88
   },
   "outcome": {
     "waypoint_reached": true,
-    "battery_at_arrival": 61.2,
-    "time_to_arrive_seconds": 47.0,
+    "battery_at_arrival": 48.0,
+    "time_to_arrive_seconds": 10.0,
     "dwell_completed": true
-  },
-  "label": {
-    "correct": null,
-    "correct_intent": null,
-    "correct_reasoning": null
   }
 }
 ```
 
-### Labeling Workflow
+> `edge_metrics` is populated only in Config B (Pi edge) runs. It is absent in Config A (local) runs.
+
+### Log File Quick Reference
+
+| File | Contains | Used For |
+|------|----------|----------|
+| `flight_*.jsonl` | Every LLM decision with full input/output/metrics | Primary research data |
+| `run_*_local_terminal.log` | Full terminal output — local runs | Safety gate counts, error tracking |
+| `run_*_edge_terminal.log` | Full terminal output — edge runs | Timeout events, `[EDGE]` inference lines |
+| `pi_hardware_log_*.txt` | CPU / RAM / Temp every 5s from Pi | Paper Section E hardware metrics |
+| `results/latex_tables.tex` | Auto-generated LaTeX tables | Paste into Overleaf paper |
+
+### Running the Analysis Script
 
 ```bash
-# After a flight session
-python3 uav_label_dataset.py
+# Full analysis — all configs
+python3 ~/uav_dataset/analyze_paper_data.py
 
-# For each decision:
-#   Y = correct
-#   N = wrong  (prompts for correct intent + better reasoning)
-#   S = skip
-#   Q = quit and save progress
+# Save output to file
+python3 ~/uav_dataset/analyze_paper_data.py 2>&1 | \
+  tee ~/uav_dataset/results/final_analysis_$(date +%Y%m%d_%H%M%S).txt
 
-# Show stats only (no labeling)
-python3 uav_label_dataset.py --stats
-
-# Export labeled data to fine-tuning format
-python3 uav_label_dataset.py --export
-# Output: ~/uav_dataset/export/flight_*_training.jsonl
-# Format: Unsloth SFT compatible
-# {"instruction":"...", "input":"<situation>", "output":"<correct JSON>"}
+# Get LaTeX tables
+cat ~/uav_dataset/results/latex_tables.tex
 ```
-
-After ~200 labeled examples you have enough to LoRA fine-tune LLaMA3 on your specific mission scenarios and failure cases.
 
 <br>
 
 ---
 
-## 📁 Project Structure
+## 📈 Research Results Summary
+
+Experimental results across 5 sessions per configuration (60 local, 33 edge decisions):
+
+### LLM Inference Performance
+
+| Metric | Local (LLaMA3 8B) | Pi Edge (LLaMA 3.2 1B) |
+|--------|------------------|------------------------|
+| Total decisions | 60 | 33 |
+| Successful (n) | 59 | 28 |
+| Mean latency | **3.241s** | **52.642s** |
+| Std deviation | 0.714s | 11.304s |
+| Median latency | 3.210s | 49.350s |
+| Mean confidence | 82.8% | 90.0% |
+| Timeouts | 0 | 4 (12.1%) |
+| Fallbacks | 1 | 5 |
+
+### Signal Loss Re-entry Accuracy
+
+| Metric | Local (8B) | Pi Edge (1B) |
+|--------|-----------|--------------|
+| Total losses | 5 | 5 |
+| Re-entry decisions | 10 | 8 |
+| Avg loss duration | 5.0s | 33.0s |
+| Correct re-entry | **10/10 (100%)** | **6/8 (75%)** |
+
+### Raspberry Pi 5 Hardware (during inference)
+
+| Metric | Value |
+|--------|-------|
+| Avg CPU | 18.5% |
+| Peak CPU | 63.4% |
+| Avg RAM | 1,254 MB |
+| Peak RAM | 2,328 MB |
+| Avg Temperature | 47.4°C |
+| **Peak Temperature** | **78.5°C** *(limit: 80°C)* |
+
+> Full results and LaTeX tables in `uav_dataset/results/`. See the accompanying paper for complete analysis.
+
+<br>
+
+---
+
+## 📁 Project File Structure
 
 ```
-ros_ws/
-├── autonomous_uav_final.py      # 🔑 MAIN SCRIPT — run this
-│                                #    All 5 stages in one file
-│                                #    State machine, LLM brain, safety gate,
-│                                #    signal loss memory, dataset collector
-│
-├── uav_dashboard.py             # 📊 Live operator display (curses)
-│                                #    Run in a separate terminal
-│                                #    Reads /tmp/uav_dashboard_state.json
-│
-├── uav_label_dataset.py         # 🏷  Post-flight labeling tool
-│                                #    Labels decisions correct/wrong
-│                                #    Exports fine-tuning JSONL
-│
-├── ~/uav_dataset/               # 📁 Auto-created on first run
-│   ├── flight_20260221_*.jsonl  #    One file per flight session
-│   └── export/
-│       └── *_training.jsonl     #    Labeled fine-tuning data
-│
-└── src/
-    ├── px4_msgs/                # PX4 ↔ ROS 2 message definitions
-    │   └── msg/                 # VehicleLocalPosition, BatteryStatus, etc.
-    ├── px4_offboard/            # Offboard control package
-    ├── px4_ros_com/             # PX4 ↔ ROS 2 bridge utilities
-    │   └── src/lib/
-    │       └── frame_transforms.cpp  # NED ↔ ENU coordinate transforms
-    └── uav_control/             # Autonomous decision package
+UAV-Triage/
+└── ros_ws/
+    ├── src/
+    │   ├── uav_control/uav_control/
+    │   │   ├── autonomous_uav_final.py           # Config A — Local GCS (LLaMA3 8B)
+    │   │   ├── autonomous_uav_pi_edge_short.py   # Config B — Pi 5 Edge (LLaMA 3.2 1B)
+    │   │   ├── uav_dashboard.py                  # Live operator terminal display
+    │   │   └── uav_label_dataset.py              # Post-flight decision labeler
+    │   ├── px4_msgs/                             # PX4 ↔ ROS 2 message definitions
+    │   ├── px4_offboard/                         # Offboard control package
+    │   └── px4_ros_com/                          # ROS 2 bridge utilities
+    └── install/                                  # colcon build outputs
 ```
-
-### Key Files at a Glance
 
 | File | Role |
 |------|------|
-| `autonomous_uav_final.py` | **Main script** — all logic, run this |
-| `uav_dashboard.py` | **Live display** — separate terminal, Q to close |
-| `uav_label_dataset.py` | **Labeling tool** — run after flights |
-| `px4_msgs/msg/` | Message definitions for all PX4 ↔ ROS 2 topics |
-| `px4_ros_com/src/lib/frame_transforms.cpp` | NED ↔ ENU coordinate frame utilities |
+| `autonomous_uav_final.py` | **Config A main script** — local LLaMA3 8B |
+| `autonomous_uav_pi_edge_short.py` | **Config B main script** — Pi 5 edge LLaMA 3.2 1B |
+| `uav_dashboard.py` | **Live display** — run in separate terminal, Q to quit |
+| `uav_label_dataset.py` | **Labeling tool** — review decisions, export fine-tuning data |
+| `uav_dataset/analyze_paper_data.py` | **Analysis script** — generates all paper tables |
 
 <br>
 
@@ -704,18 +763,34 @@ ros_ws/
 
 ## 🔧 Troubleshooting
 
+**Pi turns solid red LED / crashes during inference:**
+> Thermal shutdown — 80°C limit hit. Fix: add passive heatsink, ensure `CPUQuota=200%`
+> in override.conf, use official 27W Pi 5 PSU. Wait 60s after power cycle.
+
+**Ollama on Pi not reachable from laptop:**
+```bash
+# On Pi — verify binding on all interfaces
+ss -tlnp | grep 11434   # Must show 0.0.0.0:11434
+
+# From laptop
+curl http://<pi-ip>:11434/api/tags
+```
+
+**Edge script times out every query:**
+> Check Pi temp: `ssh <user>@<pi-ip> "vcgencmd measure_temp"` — if >70°C, wait to cool.
+> Check WiFi: `ping <pi-ip>` — must be <5ms for stable operation.
+> If prompt tokens >700, prompt is growing too large — restart with fresh run.
+
 **Gazebo doesn't open or freezes:**
 ```bash
 pkill -f gz && pkill -f gzserver && pkill -f gzclient
 cd ~/PX4-Autopilot && make px4_sitl gz_x500
 ```
 
-**`/fmu/` ROS 2 topics not appearing:**
+**`/fmu/` topics not appearing:**
 ```bash
-# Always start DDS agent BEFORE PX4
-ros2 topic list | grep fmu
-# Must show /fmu/in/ and /fmu/out/ topics
-# If empty → stop everything, restart T1 then T2
+# DDS agent MUST start before PX4
+ros2 topic list | grep fmu   # Must show /fmu/in/ and /fmu/out/
 ```
 
 **`colcon build` fails on px4_msgs:**
@@ -726,49 +801,25 @@ colcon build --symlink-install --packages-select px4_msgs
 colcon build --symlink-install
 ```
 
-**Ollama not responding / LLM silent:**
+**Ollama not responding (local):**
 ```bash
-systemctl status ollama
 sudo systemctl restart ollama
 curl http://localhost:11434/api/generate \
   -d '{"model":"llama3","prompt":"say READY","stream":false}'
 ```
 
-**Script exits immediately after sourcing:**
-```bash
-# Run both source commands every new terminal
-source /opt/ros/humble/setup.bash
-source ~/ros_ws/install/local_setup.bash
-python3 autonomous_uav_final.py
-```
-
-**QGC can't find drone:**
-> PX4 SITL must be running first. QGC auto-connects to `localhost:14550` UDP. No manual config needed for SITL.
-
-**Dashboard says "command not found":**
-```bash
-# Always run with python3 explicitly
-python3 uav_dashboard.py
-
-# If curses error — terminal may be too small, try resizing window or:
-TERM=xterm python3 uav_dashboard.py
-```
+**JSON parse failure from Pi:**
+> Response truncated mid-JSON — `num_predict` too low.
+> Increase to 150 in the edge script options dict.
 
 **Dashboard says "Waiting for UAV system to start":**
 ```bash
-# Make sure autonomous_uav_final.py is running first
-# The dashboard reads /tmp/uav_dashboard_state.json written by the node
-ls /tmp/uav_dashboard_state.json
+ls /tmp/uav_dashboard_state.json   # Must exist — written by node every 0.5s
 ```
 
-**T or Y key snaps back to normal immediately:**
-> Fixed in `autonomous_uav_final.py`. Overrides are locked until you press `R`. Look for `[EKF_OVR]` or `[BATT_OVR]` in the status line — these confirm the lock is active. If you don't see them make sure you're running `autonomous_uav_final.py` and not an older stage file.
-
-**Drone only visits 2 sectors and keeps toggling:**
-> Fixed in `autonomous_uav_final.py` by replacing `last_sector_id` (single int) with `visited_sectors` (set). Make sure you're running the final version.
-
-**Battery critical but LLM picks a sector instead of RTB:**
-> Fixed by the hard safety gate in `trigger_llm()`. When battery < 15% the LLM is bypassed entirely and RTB is forced before Ollama is called. Make sure you're running `autonomous_uav_final.py`.
+**T or Y key snaps back immediately:**
+> Overrides lock until `R` is pressed. Confirm `[EKF_OVR]` or `[BATT_OVR]` shows
+> in the status line — these confirm the lock is active.
 
 <br>
 
@@ -782,7 +833,7 @@ ls /tmp/uav_dashboard_state.json
 | [@BHUVANRJ](https://github.com/BHUVANRJ) | Autonomous architecture & LLM integration |
 
 > **Institution:** University of Michigan - Dearborn
-> **Project:** UAV Triage Architecture — Autonomous Systems Research
+> **Project:** EGLe — Edge-Deployed LLM Autonomy for UAV Triage
 > **Year:** 2026
 
 <br>
@@ -796,4 +847,4 @@ University of Michigan - Dearborn © 2026
 
 ---
 
-*Stack: ROS 2 Humble · PX4 v1.14 · Gazebo · Micro XRCE-DDS · Ollama · LLaMA3 8B · Python 3.10 · Ubuntu 22.04*
+*Stack: ROS 2 Humble · PX4 v1.14 · Gazebo · Micro XRCE-DDS · Ollama · LLaMA3 8B · LLaMA 3.2 1B · Raspberry Pi 5 (16GB) · Python 3.10 · Ubuntu 22.04*

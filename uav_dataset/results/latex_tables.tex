@@ -1,0 +1,79 @@
+% ============================================================
+% AUTO-GENERATED LaTeX Tables — paste into Overleaf
+% Generated: 2026-02-28 06:17:45
+% ============================================================
+
+% TABLE: Core LLM Performance (Section A)
+\begin{table}[h]
+\centering
+\caption{LLM Inference Performance Comparison}
+\label{tab:llm_performance}
+\begin{tabular}{lrrrrrrr}
+\hline
+\textbf{Config} & \textbf{Decisions} & \textbf{Avg Lat (s)} & \textbf{Min (s)} & \textbf{Max (s)} & \textbf{Avg Conf} & \textbf{Fallbacks} & \textbf{Timeouts} \\
+\hline
+Local (llama3:8b) & 60 & 3.24 & 2.10 & 6.71 & 82.8\% & 1 & 0 \\
+Pi Edge (llama3.2:1b) & 33 & 52.64 & 43.64 & 98.11 & 90.0\% & 5 & 4 \\
+\hline
+\end{tabular}
+\end{table}
+
+% TABLE: Signal Loss Recovery (Section C)
+\begin{table}[h]
+\centering
+\caption{Signal Loss Recovery Analysis}
+\label{tab:signal_loss}
+\begin{tabular}{lrrrrrr}
+\hline
+\textbf{Config} & \textbf{Losses} & \textbf{Reentries} & \textbf{Avg Dur (s)} & \textbf{Correct} & \textbf{Incorrect} & \textbf{Accuracy} \\
+\hline
+Local (8B) & 5 & 10 & 5.0 & 10 & 0 & 100.0\% \\
+Pi Edge (1B) & 5 & 8 & 33.0 & 6 & 2 & 75.0\% \\
+\hline
+\end{tabular}
+\end{table}
+
+% TABLE: Safety Gate (Section D)
+\begin{table}[h]
+\centering
+\caption{Safety Gate Activation Analysis}
+\label{tab:safety_gate}
+\begin{tabular}{lrrrr}
+\hline
+\textbf{Config} & \textbf{EKF Gates} & \textbf{Batt Gates} & \textbf{Total} & \textbf{Always Correct} \\
+\hline
+Local (8B) & 0 & 0 & 0 & YES \\
+Pi Edge (1B) & 0 & 0 & 0 & YES \\
+\hline
+\end{tabular}
+\end{table}
+
+% TABLE: Pi 5 Hardware Metrics (Section E)
+\begin{table}[h]
+\centering
+\caption{Raspberry Pi 5 Edge Inference Hardware Metrics}
+\label{tab:pi_hardware}
+\begin{tabular}{lr}
+\hline
+\textbf{Metric} & \textbf{Value} \\
+\hline
+Avg CPU Usage & 18.5\% \\
+Peak CPU Usage & 63.4\% \\
+Avg RAM Used & 1254 MB \\
+Peak RAM Used & 2328 MB \\
+Avg Temperature & 47.4°C \\
+Peak Temperature & 78.5°C \\
+Avg Inference Time & 0.00s \textsuperscript{*} \\
+Min Inference Time & 0.00s \textsuperscript{*} \\
+Max Inference Time & 0.00s \textsuperscript{*} \\
+Avg Throughput & 0.0 tok/s \textsuperscript{*} \\
+Avg Network RTT & 0.00s \textsuperscript{*} \\
+Inference Timeouts & 4 \\
+\hline
+\multicolumn{2}{l}{\textsuperscript{*}No hardware logs found — run Pi monitor script} \\
+\end{tabular}
+\end{table}
+
+% NOTE: Run Pi monitor during flight:
+% ssh niche@10.0.0.119
+% while true; do echo "$(date) | CPU: $(top -bn1 | grep 'Cpu(s)' | awk '{print $2}')% | RAM: $(free -m | awk 'NR==2{printf "%s/%s MB", $3,$2}') | TEMP: $(vcgencmd measure_temp)"; sleep 5; done | tee ~/pi_hardware_log_$(date +%Y%m%d_%H%M%S).txt

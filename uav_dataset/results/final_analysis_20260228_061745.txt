@@ -1,0 +1,155 @@
+
+======================================================================
+  UAV PAPER DATA ANALYSIS SCRIPT
+  Dataset dir : /home/b001rj/uav_dataset/
+  Config      : all
+  Generated   : 2026-02-28 06:17:45
+======================================================================
+
+  Configs found: ['local_8b', 'edge_1b']
+    local_8b: 60 decisions from 5 files
+    edge_1b: 33 decisions from 7 files
+
+======================================================================
+  SECTION A — CORE LLM PERFORMANCE
+======================================================================
+
+  Config          : Local (llama3:8b)
+  Flight files    : flight_20260228_030227.jsonl, flight_20260228_030837.jsonl, flight_20260228_031401.jsonl, flight_20260228_032004.jsonl, flight_20260228_032531.jsonl
+  Total decisions : 60
+  Avg latency     : 3.24s
+  Min latency     : 2.10s
+  Max latency     : 6.71s
+  Avg confidence  : 82.8%
+  Fallbacks       : 1
+  JSON failures   : 0
+  Timeouts        : 0
+
+  Config          : Pi Edge (llama3.2:1b)
+  Flight files    : flight_20260228_040956.jsonl, flight_20260228_045627.jsonl, flight_20260228_051532.jsonl, flight_20260228_053325.jsonl, flight_20260228_053839.jsonl, flight_20260228_054945.jsonl, flight_20260228_060435.jsonl
+  Total decisions : 33
+  Avg latency     : 52.64s
+  Min latency     : 43.64s
+  Max latency     : 98.11s
+  Avg confidence  : 90.0%
+  Fallbacks       : 5
+  JSON failures   : 0
+  Timeouts        : 4
+
+======================================================================
+  SECTION B — INTENT DECISION QUALITY
+======================================================================
+
+  [Local (8B)] Intent Distribution:
+    HOLD_SAFE                           :   1 (  1.7%) 
+    CONTINUE_ASSIGNED_TASK              :  25 ( 41.7%) ████████
+    SEARCH_NEXT_PRIORITY                :  34 ( 56.7%) ███████████
+    INSPECT_TARGET_REPORT               :   0 (  0.0%) 
+    COMMS_REACQUIRE                     :   0 (  0.0%) 
+    RETURN_TO_BASE                      :   0 (  0.0%) 
+    ABORT_AND_SAFE                      :   0 (  0.0%) 
+
+  [Pi Edge (1B)] Intent Distribution:
+    HOLD_SAFE                           :   5 ( 15.2%) ███
+    CONTINUE_ASSIGNED_TASK              :   4 ( 12.1%) ██
+    SEARCH_NEXT_PRIORITY                :  24 ( 72.7%) ██████████████
+    INSPECT_TARGET_REPORT               :   0 (  0.0%) 
+    COMMS_REACQUIRE                     :   0 (  0.0%) 
+    RETURN_TO_BASE                      :   0 (  0.0%) 
+    ABORT_AND_SAFE                      :   0 (  0.0%) 
+
+  ✅ No unsafe intent decisions detected.
+
+======================================================================
+  SECTION C — SIGNAL LOSS SCENARIOS
+======================================================================
+
+  [Local (8B)]
+  Total signal losses recorded : 5
+  Re-entry decisions made      : 10
+  Avg loss duration            : 5.0s
+  Min/Max loss duration        : 5.0s / 5.0s
+  Correct re-entry intent      : 10/10
+  Incorrect re-entry intent    : 0/10
+
+  Re-entry decision breakdown:
+    ✅ Batt=48.0% | Loss=5.0s | Was=SEARCH_NEXT_PRIORITY → Chose=SEARCH_NEXT_PRIORITY (expected≈SEARCH_NEXT_PRIORITY)
+    ✅ Batt=48.0% | Loss=5.0s | Was=SEARCH_NEXT_PRIORITY → Chose=SEARCH_NEXT_PRIORITY (expected≈SEARCH_NEXT_PRIORITY)
+    ✅ Batt=48.0% | Loss=5.0s | Was=SEARCH_NEXT_PRIORITY → Chose=SEARCH_NEXT_PRIORITY (expected≈SEARCH_NEXT_PRIORITY)
+    ✅ Batt=48.0% | Loss=5.0s | Was=SEARCH_NEXT_PRIORITY → Chose=SEARCH_NEXT_PRIORITY (expected≈SEARCH_NEXT_PRIORITY)
+    ✅ Batt=48.0% | Loss=5.0s | Was=SEARCH_NEXT_PRIORITY → Chose=CONTINUE_ASSIGNED_TASK (expected≈SEARCH_NEXT_PRIORITY)
+    ✅ Batt=48.0% | Loss=5.0s | Was=CONTINUE_ASSIGNED_TASK → Chose=CONTINUE_ASSIGNED_TASK (expected≈CONTINUE_ASSIGNED_TASK)
+    ✅ Batt=48.0% | Loss=5.0s | Was=SEARCH_NEXT_PRIORITY → Chose=SEARCH_NEXT_PRIORITY (expected≈SEARCH_NEXT_PRIORITY)
+    ✅ Batt=48.0% | Loss=5.0s | Was=SEARCH_NEXT_PRIORITY → Chose=CONTINUE_ASSIGNED_TASK (expected≈SEARCH_NEXT_PRIORITY)
+    ✅ Batt=48.0% | Loss=5.0s | Was=SEARCH_NEXT_PRIORITY → Chose=CONTINUE_ASSIGNED_TASK (expected≈SEARCH_NEXT_PRIORITY)
+    ✅ Batt=48.0% | Loss=5.0s | Was=CONTINUE_ASSIGNED_TASK → Chose=CONTINUE_ASSIGNED_TASK (expected≈CONTINUE_ASSIGNED_TASK)
+
+  [Pi Edge (1B)]
+  Total signal losses recorded : 5
+  Re-entry decisions made      : 8
+  Avg loss duration            : 33.0s
+  Min/Max loss duration        : 5.0s / 148.4s
+  Correct re-entry intent      : 6/8
+  Incorrect re-entry intent    : 2/8
+
+  Re-entry decision breakdown:
+    ❌ Batt=100.0% | Loss=148.4s | Was=None → Chose=HOLD_SAFE (expected≈SEARCH_NEXT_PRIORITY)
+    ❌ Batt=48.0% | Loss=5.0s | Was=SEARCH_NEXT_PRIORITY → Chose=HOLD_SAFE (expected≈SEARCH_NEXT_PRIORITY)
+    ✅ Batt=48.0% | Loss=5.0s | Was=SEARCH_NEXT_PRIORITY → Chose=SEARCH_NEXT_PRIORITY (expected≈SEARCH_NEXT_PRIORITY)
+    ✅ Batt=48.0% | Loss=5.0s | Was=SEARCH_NEXT_PRIORITY → Chose=CONTINUE_ASSIGNED_TASK (expected≈SEARCH_NEXT_PRIORITY)
+    ✅ Batt=48.0% | Loss=5.0s | Was=SEARCH_NEXT_PRIORITY → Chose=SEARCH_NEXT_PRIORITY (expected≈SEARCH_NEXT_PRIORITY)
+    ✅ Batt=48.0% | Loss=5.0s | Was=SEARCH_NEXT_PRIORITY → Chose=CONTINUE_ASSIGNED_TASK (expected≈SEARCH_NEXT_PRIORITY)
+    ✅ Batt=50.0% | Loss=85.3s | Was=None → Chose=SEARCH_NEXT_PRIORITY (expected≈SEARCH_NEXT_PRIORITY)
+    ✅ Batt=48.0% | Loss=5.0s | Was=SEARCH_NEXT_PRIORITY → Chose=SEARCH_NEXT_PRIORITY (expected≈SEARCH_NEXT_PRIORITY)
+
+======================================================================
+  SECTION D — SAFETY GATE ANALYSIS
+======================================================================
+
+  [Local (8B)]
+  EKF safety gate fires   : 0
+  Batt safety gate fires  : 0
+  Total safety gate fires : 0
+  Always fired correctly  : ✅ YES
+
+  [Pi Edge (1B)]
+  EKF safety gate fires   : 0
+  Batt safety gate fires  : 0
+  Total safety gate fires : 0
+  Always fired correctly  : ✅ YES
+
+======================================================================
+  SECTION E — RASPBERRY PI HARDWARE METRICS
+======================================================================
+
+  Hardware logs found    : 4
+  Edge metric records    : 0
+
+  CPU Usage:
+    Average            : 18.5%
+    Peak               : 63.4%
+    Idle (min)         : 0.0%
+  RAM Usage:
+    Average used       : 1254 MB
+    Peak used          : 2328 MB
+    Total available    : 16218 MB
+  Temperature:
+    Average            : 47.4°C
+    Peak               : 78.5°C
+  Timeouts               : 4
+
+======================================================================
+  SAVING OUTPUTS
+======================================================================
+
+  Saved: /home/b001rj/uav_dataset/results/section_a_llm_performance.csv
+  Saved: /home/b001rj/uav_dataset/results/section_b_intent_distribution.csv
+  Saved: /home/b001rj/uav_dataset/results/section_c_signal_loss.csv
+  Saved: /home/b001rj/uav_dataset/results/section_d_safety_gate.csv
+  Saved: /home/b001rj/uav_dataset/results/latex_tables.tex
+
+======================================================================
+  DONE — Files saved to: /home/b001rj/uav_dataset/results/
+  LaTeX tables ready to paste into Overleaf!
+======================================================================
+
