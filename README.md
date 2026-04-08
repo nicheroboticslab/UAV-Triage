@@ -493,7 +493,27 @@ ssh <user>@<pi-ip> "vcgencmd measure_temp"
 <br>
 
 ---
+## 🎮 Gamepad Controller (ShanWan Readgear)
+Run: python3 src/uav_control/uav_control/autonomous_uav_controller.py
 
+| Control        | Action                  |
+|----------------|-------------------------|
+| Left stick XY  | Fly forward/back/strafe |
+| Right stick Y  | Altitude up/down        |
+| X button       | Battery spoof → 10%     |
+| O button       | EKF spoof → 0.2         |
+| Triangle       | Reset both overrides     |
+| L1             | Force LLM re-query      |
+
+## 🗺️ Gazebo Worlds
+- egle_survey.sdf  — flat world with 5 colored sector markers
+- egle_baylands.sdf — realistic baylands with sector markers
+
+Launch:
+PX4_GZ_WORLD=egle_survey make px4_sitl gz_x500
+
+## 📍 QGC Waypoint Upload
+python3 upload_waypoints.py
 ## 🧠 How the LLM Brain Works
 
 ### Compressed Prompt (edge config, ~380 tokens)
