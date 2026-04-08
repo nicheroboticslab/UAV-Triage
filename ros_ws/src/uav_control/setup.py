@@ -25,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'ollama_uav_keyboard = uav_control.ollama_uav_keyboard:main',
+            'uav_controller = uav_control.autonomous_uav_controller:main',
         ],
     },
 )
