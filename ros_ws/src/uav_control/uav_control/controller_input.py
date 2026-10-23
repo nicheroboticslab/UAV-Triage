@@ -55,7 +55,7 @@ BTN_L3, BTN_R3 = 9, 10
 
 POLL_HZ = 20
 LOG_HZ = 10
-DEADZONE = 0.15       # sticks: |v| below this = 0; output rescaled to start at 0 at the edge
+DEADZONE = 0.18       # sticks: |v| below this = 0; rescaled to start at 0 at the edge (left stick rests at +0.14 on Ben's pad)
 TRIGGER_DEADZONE = 0.05
 EXPO = 0.6            # 0 = linear, 1 = cubic; RC-style blend out = (1-e)*x + e*x^3
 

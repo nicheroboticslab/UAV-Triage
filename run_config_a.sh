@@ -37,12 +37,12 @@ rm -f /tmp/uav_start_signal   # pilot script waits for this (START)
 > "$PX4_LOG"   # truncate any stale log so old "Ready for takeoff!" lines can't cause a false match
 
 echo "Checking for leftover processes from a previous run..."
-if pgrep -f "px4|MicroXRCEAgent|QGroundControl|autonomous_uav|gz sim|camera_view" > /dev/null; then
+if pgrep -f "px4|MicroXRCEAgent|QGroundControl|autonomous_uav|gz sim|camera_view|flow_animator" > /dev/null; then
     echo "WARNING: found existing related processes still running:"
-    ps aux | grep -E "px4|MicroXRCEAgent|QGroundControl|autonomous_uav|gz sim|camera_view" | grep -v grep
+    ps aux | grep -E "px4|MicroXRCEAgent|QGroundControl|autonomous_uav|gz sim|camera_view|flow_animator" | grep -v grep
     read -p "Kill them and continue? (y/N) " confirm
     if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
-        pkill -9 -f "px4|MicroXRCEAgent|QGroundControl|autonomous_uav|gz sim|camera_view"
+        pkill -9 -f "px4|MicroXRCEAgent|QGroundControl|autonomous_uav|gz sim|camera_view|flow_animator"
         sleep 2
     else
         echo "Aborted. Resolve manually, then rerun."

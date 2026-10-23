@@ -6,7 +6,7 @@
 
 REPO_DIR="$HOME/UAV-Triage"
 TAB_DIR="$REPO_DIR/logs/tab_scripts"
-PATTERN="px4|MicroXRCEAgent|QGroundControl|autonomous_uav|gz sim|camera_view|uav_dashboard"
+PATTERN="px4|MicroXRCEAgent|QGroundControl|autonomous_uav|gz sim|camera_view|uav_dashboard|flow_animator"
 
 echo "[stop] $(date '+%F %T') stopping session"
 

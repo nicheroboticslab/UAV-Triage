@@ -26,6 +26,7 @@
         "water_depth": "Below knee",
         "water_motion": "Standing",
         "priority": "P1",
+        "water_scored": true,
         "depth": "ankle",
         "water": "standing_shallow"
       }
@@ -47,6 +48,7 @@
         "water_depth": "Knee to waist",
         "water_motion": "Standing",
         "priority": "P2",
+        "water_scored": true,
         "depth": "waist",
         "water": "standing_deep"
       }
@@ -68,6 +70,7 @@
         "water_depth": "Below knee",
         "water_motion": "Standing",
         "priority": "P3",
+        "water_scored": true,
         "depth": "ankle",
         "water": "standing_shallow"
       }
@@ -89,6 +92,7 @@
         "water_depth": "Below knee",
         "water_motion": "Standing",
         "priority": "P3",
+        "water_scored": true,
         "depth": "ankle",
         "water": "standing_shallow"
       }
@@ -110,6 +114,7 @@
         "water_depth": "Knee to waist",
         "water_motion": "Flowing",
         "priority": "P4",
+        "water_scored": false,
         "depth": "waist",
         "water": "flowing"
       }
