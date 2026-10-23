@@ -24,6 +24,8 @@ import inspect
 from nofly_monitor import NoFlyMonitor
 from session_config import load_session
 from inaction_log import InactionLog
+from battery_model import BatterySystem, load_config as load_battery_config
+from px4_battery_display import PX4BatteryDisplay
 from datetime import datetime
 from pynput import keyboard
 from enum import Enum
@@ -83,6 +85,8 @@ MAP = _load_scenario(SCENARIO_FILE)
 # tau_s = null in session.json is the control condition: no takeover (A4).
 SESSION                      = load_session()
 TAU_S                        = SESSION["tau_s"]
+# D2/D3: script-driven battery (battery.json); PX4's simulated battery is logged only.
+BATT_CFG, BATT_CFG_PATH      = load_battery_config()
 BATTERY_LOW_THRESH           = 25.0
 BATTERY_CRIT_THRESH          = 15.0
 EKF_CONF_MIN                 = 0.4
@@ -100,6 +104,8 @@ LOITER_OMEGA                 = 0.3    # rad/s  (~21s per orbit)
 # at MPC_XY_VEL_MAX (set_px4_params.py).
 AGENT_CRUISE_MS              = 14.0
 AGENT_ACCEL_MS2              = 2.5    # carrot speed ramp up/down (m/s^2)
+RETURN_REASONS               = ("emergency_return", "battery_gate")
+CONTROL_DT_S                 = 0.05   # control loop period (20 Hz)
 
 # LLM request settings (F1). Fixed for the study; change only with a new
 # software version, since they affect agent behaviour.
@@ -360,6 +366,21 @@ class UAVAutonomousNode(Node):
         self.waypoint_depart_time     = 0.0
         self.signal_loss_since_depart = False
 
+        # D2/D3/D6: deterministic battery model and return gate
+        self.vel          = [0.0, 0.0, 0.0]
+        self.batt         = BatterySystem(BATT_CFG)
+        self.px4_battery_pct = None
+        self.batt_log_path = os.path.join(
+            DATASET_DIR, f"battery_{datetime.fromtimestamp(self.flight_start_time).strftime('%Y%m%d_%H%M%S')}.jsonl")
+        self.batt_log_every = max(1, int(round(1.0 / (CONTROL_DT_S * BATT_CFG.get("log_hz", 2.0)))))
+        with open(self.batt_log_path, "a") as f:
+            f.write(json.dumps({"type": "config", "battery_file": BATT_CFG_PATH, "config": BATT_CFG,
+                                "timer_period_s": CONTROL_DT_S}) + "\n")
+
+        # D2: QGC shows PX4's simulated battery; make it follow the model.
+        self.px4_batt_display = PX4BatteryDisplay(lambda: self.batt.pct, self.get_logger())
+        self.px4_batt_display.start()
+
         # Block end (emergency land is terminal for the block)
         self.block_ended      = False
         self.block_end_reason = None
@@ -385,7 +406,7 @@ class UAVAutonomousNode(Node):
 
         # Loop
         self.counter      = 0
-        self.timer_period = 0.05
+        self.timer_period = CONTROL_DT_S
         self.timer = self.create_timer(self.timer_period, self.loop)
         self.nofly = NoFlyMonitor(DATASET_DIR, self.get_logger(), self.log_event)
 
@@ -455,8 +476,44 @@ class UAVAutonomousNode(Node):
         self.dwell_active     = False
         self.target_pos       = list(ground_target)
         self.inaction.close(time.time(), self.drone_state.value, "block_ended")
-        self.log_event("Emergency return home — block ended." if reason == "emergency_return"
-                       else "Emergency landing — block ended.")
+        self.log_event({"emergency_return": "Emergency return home — block ended.",
+                        "battery_gate": "Battery reserve reached — returning home. Block ended."}
+                       .get(reason, "Emergency landing — block ended."))
+
+    def _battery_tick(self):
+        """Advance the battery model one control step (fixed dt -> deterministic)."""
+        flying = self.counter >= 120 and not self.block_landed   # from ARM command until landed
+        events = self.batt.step(self.vel, self.timer_period, flying)
+        last   = self.batt.last
+        self.battery_volt = last["voltage_v"]
+        self.battery_amp  = last["current_a"]
+        if not self.battery_override:
+            self.battery_pct = self.batt.pct
+        if "warn" in events:
+            self.log_event(f"Battery low ({self.batt.pct:.0f}%). Automatic return at {self.batt.return_pct:.0f}%.")
+        if "gate" in events:
+            self._battery_gate()
+        if self.counter % self.batt_log_every == 0:
+            rec = {"t_s": round(time.time() - self.flight_start_time, 3), "tick": self.counter,
+                   "pct": round(self.batt.pct, 3), "drawn_wh": round(self.batt.battery.drawn_wh, 4),
+                   "power_w": round(last["power_w"], 1), "airspeed_ms": round(last["airspeed_ms"], 2),
+                   "vz_ms": round(self.vel[2], 2), "voltage_v": round(last["voltage_v"], 3),
+                   "current_a": round(last["current_a"], 3), "px4_pct": self.px4_battery_pct,
+                   "state": self.drone_state.value, "egle_state": self._egle_state()}
+            try:
+                with open(self.batt_log_path, "a") as f:
+                    f.write(json.dumps(rec) + "\n")
+            except Exception:
+                pass
+
+    def _battery_gate(self):
+        """D3: battery reserve reached -> PX4 return-to-launch and land; block ends.
+        Same in every condition, logged separately from EGLe takeovers."""
+        if self.block_ended:
+            return
+        self.send_cmd(20)   # MAV_CMD_NAV_RETURN_TO_LAUNCH
+        self.get_logger().error(f"[BATT] Reserve reached ({self.batt.pct:.1f}%) → RETURN HOME AND LAND")
+        self._end_block("battery_gate", [0.0, 0.0, 0.0])
 
     def emergency_return(self):
         """Operator emergency (gamepad LB+RB): PX4 return-to-launch, which flies
@@ -475,7 +532,7 @@ class UAVAutonomousNode(Node):
         HOLD appears only in the control condition (tau = None) while the
         operator is inactive, so it can never cue an upcoming takeover."""
         if self.block_ended:
-            if self.block_end_reason == "emergency_return" and not self.block_landed:
+            if self.block_end_reason in RETURN_REASONS and not self.block_landed:
                 return "RETURNING"
             return "LANDED"
         if getattr(self, "gate_return", False):
@@ -503,8 +560,8 @@ class UAVAutonomousNode(Node):
             "post_reentry": self.post_signal_loss_reentry,
             "dwell_active": self.dwell_active, "dwell_remaining": round(dr, 1),
             "battery_pct": round(self.battery_pct, 1),
-            "battery_low": self.battery_pct < BATTERY_LOW_THRESH,
-            "battery_crit": self.battery_pct < BATTERY_CRIT_THRESH,
+            "battery_low": self.battery_pct <= self.batt.warn_pct,
+            "battery_crit": self.battery_pct <= self.batt.return_pct,
             "ekf_confidence": round(self.ekf_confidence, 2),
             "ekf_ok": self.ekf_confidence >= EKF_CONF_MIN,
             "position": [round(v, 1) for v in self.current_pos],
@@ -632,33 +689,16 @@ Consider: Is it safe to resume? Is the drift acceptable? Is this a pattern?
 
     def pos_cb(self, msg):
         self.current_pos = [msg.x, msg.y, msg.z]
+        self.vel         = [msg.vx, msg.vy, msg.vz]
         if not self.pos_initialized:
             self.target_pos      = self.current_pos.copy()
             self.pos_initialized = True
             self.log_event(f"Position initialized: {[f'{v:.1f}' for v in self.current_pos]}")
 
     def battery_cb(self, msg):
-        # =====================================================
-        #  FIX 2: If battery override active, hold forced value
-        #  and do NOT read from PX4 until override is cleared.
-        # =====================================================
-        if self.battery_override:
-            self.battery_pct = self.battery_override_value
-            return
-
-        prev              = self.battery_pct
-        self.battery_pct  = msg.remaining * 100.0
-        self.battery_volt = msg.voltage_v
-        self.battery_amp  = msg.current_a
-
-        if prev >= BATTERY_LOW_THRESH > self.battery_pct:
-            self.log_event(f"Battery LOW: {self.battery_pct:.1f}%")
-        if prev >= BATTERY_CRIT_THRESH > self.battery_pct:
-            self.log_event(f"Battery CRITICAL: {self.battery_pct:.1f}% — RTB required")
-        if self.battery_pct < BATTERY_CRIT_THRESH and self.counter % 40 == 0:
-            self.get_logger().error(f"[BATT] 🚨 CRITICAL {self.battery_pct:.1f}%")
-        elif self.battery_pct < BATTERY_LOW_THRESH and self.counter % 200 == 0:
-            self.get_logger().warn(f"[BATT] ⚠ LOW {self.battery_pct:.1f}%")
+        # D2: PX4's simulated battery is no longer used (it clamps at 50 %).
+        # battery_pct comes from the battery model in _battery_tick().
+        self.px4_battery_pct = msg.remaining * 100.0
 
     def ekf_cb(self, msg):
         # =====================================================
@@ -1347,6 +1387,8 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
         offboard.position  = True
         self.offboard_pub.publish(offboard)
 
+        self._battery_tick()
+
         if self.block_ended:
             # Terminal: hold the ground setpoint, keep the dashboard updated,
             # no takeover logic, no LLM queries, no episode logging.
@@ -1358,7 +1400,7 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
             if not self.block_landed and self.pos_initialized:
                 near_home = math.hypot(self.current_pos[0], self.current_pos[1]) < 5.0
                 on_ground = self.current_pos[2] > -0.5
-                if on_ground and (near_home or self.block_end_reason != "emergency_return"):
+                if on_ground and (near_home or self.block_end_reason not in RETURN_REASONS):
                     self.block_landed = True
                     self.log_event("Landed.")
             if self.counter % 10 == 0:

@@ -23,6 +23,12 @@ PARAMS = {
     # D4: PX4's own autonomous cruise speed (used by return-to-launch) matches
     # the agent's fixed cruise speed (AGENT_CRUISE_MS in the pilot script).
     "MPC_XY_CRUISE": (14.0, "real"),
+    # D2: PX4's simulated battery (shown in QGC) starts full; the pilot script
+    # then lowers SIM_BAT_MIN_PCT to the battery model's % (px4_battery_display.py).
+    "SIM_BAT_MIN_PCT": (100.0, "real"),
+    # PX4's own low-battery failsafe stays warning-only (0), so it cannot override
+    # the scripted return gate (D3). Thresholds left at PX4 defaults (15/7/5 %).
+    "COM_LOW_BAT_ACT": (0, "int"),
 }
 
 INT32 = mavutil.mavlink.MAV_PARAM_TYPE_INT32
