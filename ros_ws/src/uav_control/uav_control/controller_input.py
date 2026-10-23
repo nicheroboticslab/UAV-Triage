@@ -11,11 +11,14 @@ Layout (standard "Mode 2" flight controls, relative to where the drone faces):
   Left stick left/right   turn left / right (yaw)
   Right stick up/down     fly forward / back (pitch)
   Right stick left/right  fly sideways left / right (roll)
-  A  hold position (1)        X  search next sector (3)
-  B  return to base (6)       Y  re-decide now (F)
-  LB + RB together     emergency land (7)
+  A / B / X / Y        unassigned (reserved; any press counts as operator input)
+  LB + RB together     emergency: return home and land (ends the block)
   Back                 progress stats (H)
   Start                not used in flight (it's the mission START button)
+
+Operator input (A1): any stick outside the deadzone or any button press
+resets the inaction timer, except LB+RB, which starts the emergency return
+and must not be undone by its own press.
 Fault injection (T/Y/Z/R) stays keyboard-only for the researcher.
 
 Sticks glide the target smoothly (proportional, with a short leash ahead of the drone).
@@ -64,13 +67,13 @@ K_NORTH, K_SOUTH = keyboard.Key.up, keyboard.Key.down
 K_EAST, K_WEST = keyboard.Key.left, keyboard.Key.right
 K_CLIMB, K_DESCEND = keyboard.KeyCode.from_char('w'), keyboard.KeyCode.from_char('s')
 
+# A/B/X/Y previously forced agent intents (1, 6, 3) and an LLM re-query (F),
+# an operator-initiated path to autonomy that is not part of the study design.
+# They are unassigned for now and may be reassigned later.
 BUTTON_KEYS = {
-    BTN_A: keyboard.KeyCode.from_char('1'),
-    BTN_X: keyboard.KeyCode.from_char('3'),
-    BTN_B: keyboard.KeyCode.from_char('6'),
-    BTN_Y: keyboard.KeyCode.from_char('f'),
     BTN_BACK: keyboard.KeyCode.from_char('h'),
 }
+NO_INPUT_RESET = {BTN_LB, BTN_RB}
 EMERGENCY_LAND = keyboard.KeyCode.from_char('7')
 
 
@@ -209,6 +212,9 @@ class ControllerInput:
 
     def step(self, j, prev, dt):
         """One polling cycle. Returns the current button states."""
+        if getattr(self.node, "block_ended", False):
+            # Block over (emergency land): ignore all controller input.
+            return [j.get_button(i) for i in range(j.get_numbuttons())]
         # Sticks. Pygame Y axes are negative when pushed UP.
         fwd = -self._axis(j, AX_RIGHT_Y)      # pitch
         right = self._axis(j, AX_RIGHT_X)     # roll
@@ -228,11 +234,19 @@ class ControllerInput:
         both_bumpers = (buttons[BTN_LB] and buttons[BTN_RB]) if len(buttons) > BTN_RB else False
         was_both = (prev[BTN_LB] and prev[BTN_RB]) if len(prev) > BTN_RB else False
         if both_bumpers and not was_both:
-            self._log("[CONTROLLER] LB+RB → emergency land")
-            self._send(EMERGENCY_LAND)
+            self._log("[CONTROLLER] LB+RB → emergency return home and land")
+            if hasattr(self.node, "emergency_return"):
+                self.node.emergency_return()
+            else:
+                self._send(EMERGENCY_LAND)
         for btn, key in BUTTON_KEYS.items():
             if pressed(btn):
                 self._send(key)
+        # A1: any new button press (except the emergency-land bumpers) counts as
+        # operator input. If the agent was flying, the pilot script hands back.
+        if any(pressed(i) for i in range(len(buttons)) if i not in NO_INPUT_RESET):
+            if hasattr(self.node, "last_key_time"):
+                self.node.last_key_time = time.time()
         return buttons
 
     def _loop(self):
