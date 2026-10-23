@@ -214,6 +214,9 @@ class ControllerInput:
         c, s = math.cos(n.manual_yaw), math.sin(n.manual_yaw)
         vf, vr = fwd * MAX_SPEED, right * MAX_SPEED
         want = [c * vf - s * vr, s * vf + c * vr]
+        wn = math.hypot(*want)
+        if wn > MAX_SPEED:                          # forward + slide combined: cap the total, not each axis
+            want = [w * MAX_SPEED / wn for w in want]
         self._v = [approach(self._v[i], want[i], ACCEL_XY, BRAKE_XY, dt) for i in range(2)]
         self._vz = approach(self._vz, up * ALT_RATE, ACCEL_Z, ACCEL_Z, dt)
 

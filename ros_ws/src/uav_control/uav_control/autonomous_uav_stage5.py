@@ -114,6 +114,11 @@ LOITER_OMEGA                 = 0.3    # rad/s  (~21s per orbit)
 # at MPC_XY_VEL_MAX (set_px4_params.py).
 AGENT_CRUISE_MS              = 14.0
 AGENT_ACCEL_MS2              = 2.5    # carrot speed ramp up/down (m/s^2)
+def _null(v):
+    """Dataset records: the pilot uses the string "None" internally; log JSON null."""
+    return None if v in (None, "None") else v
+
+
 AGENT_YAW_RATE               = 45.0   # deg/s, agent turning toward its travel direction
 CONTROL_LIVE_ALT_M           = 2.0    # operator control (and tau) starts above this after take-off
 START_SIGNAL_FILE            = "/tmp/uav_start_signal"   # created by start_gate.py on START
@@ -171,7 +176,7 @@ class DatasetCollector:
                 "battery_pct":              round(kw.get("battery_pct", 0), 1),
                 "ekf_confidence":           round(kw.get("ekf_confidence", 0), 2),
                 "drone_state":              kw.get("drone_state", ""),
-                "current_wp":               kw.get("current_wp", ""),
+                "current_wp":               _null(kw.get("current_wp", "")),
                 "current_pos":              [round(v, 1) for v in kw.get("current_pos", [0,0,0])],
                 "signal_loss_count":        kw.get("signal_loss_count", 0),
                 "post_signal_loss_reentry": kw.get("post_reentry", False),
@@ -181,8 +186,8 @@ class DatasetCollector:
                 "last_loss_duration_s":     round(kw.get("last_loss_duration", 0), 1),
                 "last_loss_battery_cost":   round(kw.get("last_loss_battery_cost", 0), 1),
                 "last_loss_drift_m":        round(kw.get("last_loss_drift", 0), 1),
-                "pre_loss_intent":          kw.get("pre_loss_intent", "None"),
-                "pre_loss_wp":              kw.get("pre_loss_wp", "None"),
+                "pre_loss_intent":          _null(kw.get("pre_loss_intent")),
+                "pre_loss_wp":              _null(kw.get("pre_loss_wp")),
                 "battery_low_thresh":       BATTERY_LOW_THRESH,
                 "battery_crit_thresh":      BATTERY_CRIT_THRESH,
                 "ekf_conf_min":             EKF_CONF_MIN,
@@ -508,7 +513,11 @@ class UAVAutonomousNode(Node):
             self.log_event(f"Battery low ({self.batt.pct:.0f}%). Automatic return at {self.batt.return_pct:.0f}%.")
         if "gate" in events:
             self._battery_gate()
-        if self.counter % self.batt_log_every == 0:
+        if getattr(self, "_batt_log_done", False):
+            return
+        if self.block_landed:
+            self._batt_log_done = True      # one final sample after landing, then stop (log ran for hours before)
+        if self.block_landed or self.counter % self.batt_log_every == 0:
             rec = {"t_s": round(time.time() - self.flight_start_time, 3), "tick": self.counter,
                    "pct": round(self.batt.pct, 3), "drawn_wh": round(self.batt.battery.drawn_wh, 4),
                    "power_w": round(last["power_w"], 1), "airspeed_ms": round(last["airspeed_ms"], 2),
