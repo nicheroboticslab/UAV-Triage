@@ -21,3 +21,18 @@
 # OS
 .DS_Store
 
+github
+github.pub
+logs/
+runs/
+
+# Backups left by patch scripts / manual edits
+*.bak*
+*.pre_*
+*.old
+
+# Large local binaries (QGroundControl is installed per machine)
+*.AppImage
+
+# Patch helpers: already applied, not part of the runtime
+extra/apply_*_patch.py
