@@ -1,0 +1,11 @@
+{
+  "_help": "Per-block session settings. tau_s = seconds of operator inaction before the agent takes over; null = control condition (agent never takes over, vehicle holds). Edit before each block. Never shown to the participant.",
+  "tau_levels_s": [5, 15, 25, 35],
+  "episode_min_s": 1.0,
+  "block": {
+    "participant": null,
+    "sequence": null,
+    "block": null,
+    "tau_s": 5
+  }
+}
