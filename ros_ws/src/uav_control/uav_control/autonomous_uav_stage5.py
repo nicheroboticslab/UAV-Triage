@@ -314,7 +314,7 @@ class UAVAutonomousNode(Node):
         # =====================================================
         #  FIX 1: visited_sectors SET — tracks all visited sectors
         #  Every sector id gets added here when drone arrives.
-        #  When all 5 visited, set resets → full new sweep begins.
+        #  When all sectors are visited, set resets → full new sweep begins.
         # =====================================================
         self.visited_sectors = set()   # set of sector IDs already visited
         self.assigned_sector = 0       # used by CONTINUE_ASSIGNED_TASK
@@ -354,6 +354,11 @@ class UAVAutonomousNode(Node):
         self.current_record_id        = None
         self.waypoint_depart_time     = 0.0
         self.signal_loss_since_depart = False
+
+        # Block end (emergency land is terminal for the block)
+        self.block_ended      = False
+        self.block_end_reason = None
+        self.block_landed     = False
 
         # Inaction episodes (A7). tau is logged to file only, never to the
         # dashboard or event log, so it stays hidden from the participant (A3).
@@ -434,11 +439,40 @@ class UAVAutonomousNode(Node):
     #  DASHBOARD WRITER
     # =========================================================
 
+    def _end_block(self, reason, ground_target):
+        """Emergency land ends the block: PX4 lands (MAV_CMD_NAV_LAND) and the
+        pilot script stops all decision-making and ignores further input."""
+        if self.block_ended:
+            return
+        self.block_ended      = True
+        self.block_end_reason = reason
+        self.loitering        = False
+        self.dwell_active     = False
+        self.target_pos       = list(ground_target)
+        self.inaction.close(time.time(), self.drone_state.value, "block_ended")
+        self.log_event("Emergency return home — block ended." if reason == "emergency_return"
+                       else "Emergency landing — block ended.")
+
+    def emergency_return(self):
+        """Operator emergency (gamepad LB+RB): PX4 return-to-launch, which flies
+        home and lands. Terminal for the block, like emergency land."""
+        if self.block_ended:
+            return
+        self.send_cmd(20)   # MAV_CMD_NAV_RETURN_TO_LAUNCH
+        self.get_logger().error("[WPT] 🚨 OPERATOR EMERGENCY → RETURN HOME AND LAND")
+        self._end_block("emergency_return", [0.0, 0.0, 0.0])
+
     def _egle_state(self) -> str:
         """E1: participant-facing mode. No timer or countdown to tau.
         RETURNING is reserved for the battery-gate return (D3, not yet built).
+        LANDED is terminal: emergency land ended the block. After the operator's
+        emergency return (LB+RB), RETURNING shows until the vehicle is down.
         HOLD appears only in the control condition (tau = None) while the
         operator is inactive, so it can never cue an upcoming takeover."""
+        if self.block_ended:
+            if self.block_end_reason == "emergency_return" and not self.block_landed:
+                return "RETURNING"
+            return "LANDED"
         if getattr(self, "gate_return", False):
             return "RETURNING"
         if self.drone_state != DroneState.MANUAL:
@@ -477,7 +511,7 @@ class UAVAutonomousNode(Node):
             "current_wp": self.current_wp_name,
             "current_intent": self.current_intent.name if self.current_intent else "NONE",
             "llm_intent_num": self.last_llm_intent_num,
-            "llm_intent_name": self.current_intent.name if self.current_intent else "NONE",
+            "llm_intent_name": Intent(self.last_llm_intent_num).name if self.last_llm_intent_num else "NONE",
             "llm_wp_name": self.last_llm_wp_name,
             "llm_confidence": self.last_llm_confidence,
             "llm_conf_label": cl,
@@ -650,6 +684,8 @@ Consider: Is it safe to resume? Is the drift acceptable? Is this a pattern?
     # =========================================================
 
     def on_key_press(self, key):
+        if self.block_ended:
+            return
         step = 1.0
         try:
             moved = False
@@ -928,7 +964,7 @@ Consider: Is it safe to resume? Is the drift acceptable? Is this a pattern?
 
             # A6: if the operator took control while the LLM was thinking, the
             # result is stale. Log it, but do not move the vehicle or change state.
-            applied = self.drone_state != DroneState.MANUAL
+            applied = self.drone_state != DroneState.MANUAL and not self.block_ended
             if not applied:
                 new_target, wp_name = None, "None (discarded: operator in control)"
                 self.log_event(f"Agent decision discarded: operator in control ({intent.name}).")
@@ -1210,8 +1246,8 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
             wp = next_s['pos'].copy(); wp[2] = safe_alt(wp[2])
             self.get_logger().info(
                 f"[MISSION] Next sector: {next_s['name']} | "
-                f"Visited: {len(self.visited_sectors)}/5 | "
-                f"Remaining: {5 - len(self.visited_sectors)}"
+                f"Visited: {len(self.visited_sectors)}/{len(MAP['sectors'])} | "
+                f"Remaining: {len(MAP['sectors']) - len(self.visited_sectors)}"
             )
             return wp, next_s['name']
 
@@ -1241,6 +1277,7 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
             self.get_logger().error("[WPT] 🚨 ABORT → EMERGENCY LAND NOW")
             self.send_cmd(21, 0.0)
             wp = self.current_pos.copy(); wp[2] = 0.0
+            self._end_block("emergency_land", wp)
             return wp, "GROUND (EMERGENCY LAND)"
 
         return self.current_pos.copy(), "UNKNOWN"
@@ -1274,6 +1311,25 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
         offboard.timestamp = timestamp
         offboard.position  = True
         self.offboard_pub.publish(offboard)
+
+        if self.block_ended:
+            # Terminal: hold the ground setpoint, keep the dashboard updated,
+            # no takeover logic, no LLM queries, no episode logging.
+            sp           = TrajectorySetpoint()
+            sp.timestamp = timestamp
+            sp.position  = [float(v) for v in self.target_pos]
+            sp.yaw       = 0.0
+            self.traj_pub.publish(sp)
+            if not self.block_landed and self.pos_initialized:
+                near_home = math.hypot(self.current_pos[0], self.current_pos[1]) < 5.0
+                on_ground = self.current_pos[2] > -0.5
+                if on_ground and (near_home or self.block_end_reason != "emergency_return"):
+                    self.block_landed = True
+                    self.log_event("Landed.")
+            if self.counter % 10 == 0:
+                self._write_dashboard_state()
+            self.counter += 1
+            return
 
         comm_loss = self.check_operator_inactive()
         self.inaction.update(now, self.last_key_time, self.drone_state.value)
@@ -1331,6 +1387,10 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
             self.loitering      = False
             self.current_intent = None
             self.dwell_active   = False
+            # Hold at the current position on handback. Without this, an input
+            # that does not move the target (e.g. a gamepad button) left the
+            # vehicle flying on to the agent's waypoint while showing MANUAL.
+            self.target_pos     = list(self.current_pos)
 
         # ---- State machine ----
         if not comm_loss:
@@ -1370,11 +1430,11 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
                         visited_count = len(self.visited_sectors)
                         self.log_event(
                             f"Arrived and marked {self.current_wp_name} as visited. "
-                            f"({visited_count}/5 sectors done)"
+                            f"({visited_count}/{len(MAP['sectors'])} sectors done)"
                         )
                         self.get_logger().info(
                             f"[MISSION] ✅ {self.current_wp_name} visited "
-                            f"({visited_count}/5) | "
+                            f"({visited_count}/{len(MAP['sectors'])}) | "
                             f"Remaining: {[s['name'] for s in MAP['sectors'] if s['id'] not in self.visited_sectors]}"
                         )
                     # =====================================================

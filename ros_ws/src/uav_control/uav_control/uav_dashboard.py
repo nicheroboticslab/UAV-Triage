@@ -12,7 +12,7 @@ Reads /tmp/uav_dashboard_state.json written by the ROS node every 0.5s.
 Press Q to quit the dashboard (does NOT stop the drone).
 
 What it shows:
-  - EGLe mode (MANUAL / AUTONOMOUS / RETURNING / HOLD), flight time,
+  - EGLe mode (MANUAL / AUTONOMOUS / RETURNING / HOLD / LANDED), flight time,
     battery bar, EKF. No countdown or timer to the takeover delay (E1).
   - Last LLM decision: intent, target, confidence, full reasoning
   - Next checkpoint
@@ -116,7 +116,7 @@ def draw_dashboard(stdscr, state: dict):
 
     # E1: EGLe mode, steady colour per mode, no flashing, no timer to tau
     mode = state.get("egle_state") or ("MANUAL" if drone_state == "MANUAL" else "AUTONOMOUS")
-    mode_color = {"MANUAL": 2, "AUTONOMOUS": 6, "RETURNING": 3, "HOLD": 5}.get(mode, 1)
+    mode_color = {"MANUAL": 2, "AUTONOMOUS": 6, "RETURNING": 3, "HOLD": 5, "LANDED": 1}.get(mode, 1)
     llm_tag    = "  🧠THINKING" if (llm_running and mode == "AUTONOMOUS") else ""
     dwell_tag  = f"  ⏳DWELL {dwell_rem:.0f}s" if (dwell_active and mode == "AUTONOMOUS") else ""
 
