@@ -1,0 +1,98 @@
+{
+  "_help": "Baseline familiarisation set (block 1 for every participant, not analysed). Source: claude/call-scenario-assignments.md v1. priority 1..5 = urgency order (P1 first), ties by route order.",
+  "set_id": "BASELINE",
+  "calls": [
+    {
+      "call_id": "C1",
+      "location": "L28",
+      "priority": 1,
+      "urgency": "P1",
+      "call_type": "S4",
+      "scenario_code": "S4b",
+      "details": "People were crossing the footbridge and it's under water now.",
+      "condition": {
+        "worst": "mobile",
+        "in_water": true
+      },
+      "truth": {
+        "people": 2,
+        "water": "flowing",
+        "priority": "P1"
+      }
+    },
+    {
+      "call_id": "C2",
+      "location": "L09",
+      "priority": 2,
+      "urgency": "P3",
+      "call_type": "S2",
+      "scenario_code": "S2c",
+      "details": "People trapped inside the science building.",
+      "condition": {
+        "worst": "mobile",
+        "in_water": false
+      },
+      "truth": {
+        "people": 2,
+        "water": "standing_shallow",
+        "priority": "P3"
+      }
+    },
+    {
+      "call_id": "C3",
+      "location": "L10",
+      "priority": 3,
+      "urgency": "P3",
+      "call_type": "S5",
+      "scenario_code": "S5b",
+      "details": "Someone's stuck in their car in the fieldhouse lot.",
+      "condition": {
+        "worst": "mobile",
+        "in_water": false
+      },
+      "truth": {
+        "people": 3,
+        "water": "standing_shallow",
+        "priority": "P3"
+      }
+    },
+    {
+      "call_id": "C4",
+      "location": "L17",
+      "priority": 4,
+      "urgency": "P3",
+      "call_type": "S2",
+      "scenario_code": "S2a",
+      "details": "People are trapped in the movie theater.",
+      "condition": {
+        "worst": "mobile",
+        "in_water": false
+      },
+      "truth": {
+        "people": 3,
+        "water": "standing_shallow",
+        "priority": "P3"
+      }
+    },
+    {
+      "call_id": "C5",
+      "location": "L18",
+      "priority": 5,
+      "urgency": "P3",
+      "call_type": "S2",
+      "scenario_code": "S2a",
+      "details": "Students trapped in the apartment building, ground floor flooded.",
+      "condition": {
+        "worst": "mobile",
+        "in_water": false
+      },
+      "truth": {
+        "people": 4,
+        "water": "standing_shallow",
+        "priority": "P3"
+      }
+    }
+  ],
+  "hazards": [],
+  "prompts": []
+}

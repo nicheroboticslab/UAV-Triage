@@ -36,3 +36,7 @@ runs/
 
 # Patch helpers: already applied, not part of the runtime
 extra/apply_*_patch.py
+
+worlds/
+geo/lidar/
+geo/lidar_urls.txt

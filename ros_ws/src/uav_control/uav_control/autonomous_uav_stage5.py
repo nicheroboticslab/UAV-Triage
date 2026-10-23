@@ -72,6 +72,7 @@ def _load_scenario(path):
         "sectors": [{"id": i, "name": s["name"], "priority": s["priority"], "pos": ned(s, cruise)}
                     for i, s in enumerate(sc["sectors"])],
         "base": [0.0, 0.0, -float(sc.get("base", {}).get("alt_m", 5.0))],
+        "transit_alt_m": float(sc.get("transit_alt_m", cruise)),
         "comms_point": ned(sc["comms_point"], 25.0),
         "targets": [{"id": i, "pos": ned(t, 8.0), "confirmed": False}
                     for i, t in enumerate(sc.get("targets", []))],
@@ -1356,6 +1357,15 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
             self._carrot_v = 0.0
         dx, dy = tgt[0] - self._carrot[0], tgt[1] - self._carrot[1]
         d      = math.hypot(dx, dy)
+        # Transit altitude: climb before moving, cruise above buildings/trees,
+        # descend vertically once over the goal (decisions: raise cruise altitude).
+        transit_z = -MAP["transit_alt_m"]
+        if d > max(AGENT_CRUISE_MS * dt, 0.05) and transit_z < tgt[2]:
+            climbing = self.current_pos[2] > transit_z + 3.0    # NED: more than 3 m below transit
+            if climbing:
+                self._carrot_v = 0.0
+                return [self._carrot[0], self._carrot[1], transit_z], [0.0, 0.0, 0.0]
+            tgt = [tgt[0], tgt[1], transit_z]
         # Accelerate to cruise, hold, then decelerate so it stops at the goal.
         v_stop = math.sqrt(2.0 * AGENT_ACCEL_MS2 * d)
         v      = min(AGENT_CRUISE_MS, self._carrot_v + AGENT_ACCEL_MS2 * dt, v_stop)
