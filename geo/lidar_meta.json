@@ -1,0 +1,37 @@
+{
+  "project": "MI_WayneCounty_2017_A17",
+  "bbox_wsen": [
+    -83.25236296238755,
+    42.30680333237514,
+    -83.21591503761245,
+    42.333752667624864
+  ],
+  "tiles": [
+    "USGS Lidar Point Cloud MI_WayneCounty_2017_A17 422295",
+    "USGS Lidar Point Cloud MI_WayneCounty_2017_A17 422297",
+    "USGS Lidar Point Cloud MI_WayneCounty_2017_A17 422300",
+    "USGS Lidar Point Cloud MI_WayneCounty_2017_A17 422302",
+    "USGS Lidar Point Cloud MI_WayneCounty_2017_A17 422305",
+    "USGS Lidar Point Cloud MI_WayneCounty_2017_A17 425295",
+    "USGS Lidar Point Cloud MI_WayneCounty_2017_A17 425297",
+    "USGS Lidar Point Cloud MI_WayneCounty_2017_A17 425300",
+    "USGS Lidar Point Cloud MI_WayneCounty_2017_A17 425302",
+    "USGS Lidar Point Cloud MI_WayneCounty_2017_A17 425305",
+    "USGS Lidar Point Cloud MI_WayneCounty_2017_A17 427295",
+    "USGS Lidar Point Cloud MI_WayneCounty_2017_A17 427297",
+    "USGS Lidar Point Cloud MI_WayneCounty_2017_A17 427300",
+    "USGS Lidar Point Cloud MI_WayneCounty_2017_A17 427302",
+    "USGS Lidar Point Cloud MI_WayneCounty_2017_A17 427305",
+    "USGS Lidar Point Cloud MI_WayneCounty_2017_A17 430295",
+    "USGS Lidar Point Cloud MI_WayneCounty_2017_A17 430297",
+    "USGS Lidar Point Cloud MI_WayneCounty_2017_A17 430300",
+    "USGS Lidar Point Cloud MI_WayneCounty_2017_A17 430302",
+    "USGS Lidar Point Cloud MI_WayneCounty_2017_A17 430305",
+    "USGS Lidar Point Cloud MI_WayneCounty_2017_A17 432295",
+    "USGS Lidar Point Cloud MI_WayneCounty_2017_A17 432297",
+    "USGS Lidar Point Cloud MI_WayneCounty_2017_A17 432300",
+    "USGS Lidar Point Cloud MI_WayneCounty_2017_A17 432302",
+    "USGS Lidar Point Cloud MI_WayneCounty_2017_A17 432305"
+  ],
+  "api": "https://tnmaccess.nationalmap.gov/api/v1/products"
+}

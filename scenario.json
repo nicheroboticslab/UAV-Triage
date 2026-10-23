@@ -7,6 +7,8 @@
     "alt_m": 185
   },
   "cruise_alt_m": 10,
+  "transit_alt_m": 45,
+  "_alt_note": "cruise_alt_m = altitude at a call (inspection); transit_alt_m = agent altitude between calls, above building/tree tops (agent climbs first, descends vertically over the call).",
   "base": {
     "alt_m": 5
   },

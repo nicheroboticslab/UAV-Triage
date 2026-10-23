@@ -19,7 +19,7 @@ PARAMS = {
     "MPC_XY_VEL_MAX": (23.0, "real"),    # m/s horizontal cap (operator and agent)
     "MPC_Z_VEL_MAX_UP": (6.0, "real"),   # m/s ascent
     "MPC_Z_VEL_MAX_DN": (5.0, "real"),   # m/s descent
-    "RTL_RETURN_ALT": (30.0, "real"),    # m, emergency return (LB+RB) altitude
+    "RTL_RETURN_ALT": (45.0, "real"),    # m, return altitude (LB+RB, battery gate) = scenario transit_alt_m
     # D4: PX4's own autonomous cruise speed (used by return-to-launch) matches
     # the agent's fixed cruise speed (AGENT_CRUISE_MS in the pilot script).
     "MPC_XY_CRUISE": (14.0, "real"),
