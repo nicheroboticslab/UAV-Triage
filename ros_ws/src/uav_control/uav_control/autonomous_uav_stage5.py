@@ -19,6 +19,8 @@ import json
 import math
 import threading
 import os
+import hashlib
+import inspect
 from nofly_monitor import NoFlyMonitor
 from session_config import load_session
 from inaction_log import InactionLog
@@ -94,6 +96,12 @@ SIGNAL_LOSS_PATTERN_THRESHOLD = 2
 LOITER_RADIUS                = 15.0   # metres
 LOITER_OMEGA                 = 0.3    # rad/s  (~21s per orbit)
 
+# LLM request settings (F1). Fixed for the study; change only with a new
+# software version, since they affect agent behaviour.
+LLM_URL     = "http://localhost:11434"
+LLM_MODEL   = "llama3"
+LLM_OPTIONS = {"temperature": 0.0, "seed": 42}
+
 DASHBOARD_STATE_FILE  = "/tmp/uav_dashboard_state.json"
 DASHBOARD_LOG_DISPLAY = 8
 DATASET_DIR           = os.path.expanduser("~/uav_dataset")
@@ -166,6 +174,8 @@ class DatasetCollector:
                 "response_time_seconds": round(kw.get("response_time_seconds", 0), 2),
                 "fallback_used":         kw.get("fallback_used", False),
                 "was_reentry_decision":  kw.get("was_reentry", False),
+                "llm_meta":              kw.get("llm_meta"),
+                "applied":               kw.get("applied", True),
             },
             "outcome": {
                 "waypoint_reached":             None,
@@ -353,6 +363,16 @@ class UAVAutonomousNode(Node):
         for w in SESSION["warnings"]:
             self.get_logger().warn(f"[SESSION] {w}")
 
+        # LLM provenance (F1/F2): model digest from Ollama, and a hash of the
+        # prompt-building code so any prompt change is visible in the logs.
+        self._last_llm_meta  = None
+        self.llm_model_digest = self._ollama_model_digest()
+        self.prompt_code_sha256 = hashlib.sha256(
+            inspect.getsource(type(self)._query_llm_intent).encode("utf-8")).hexdigest()
+        self.get_logger().info(
+            f"[LLM] model={LLM_MODEL} digest={str(self.llm_model_digest)[:19]} "
+            f"options={LLM_OPTIONS} prompt_code_sha256={self.prompt_code_sha256[:12]}")
+
         # Loop
         self.counter      = 0
         self.timer_period = 0.05
@@ -371,13 +391,13 @@ class UAVAutonomousNode(Node):
         self._terminal_focused = _terminal_focused
         _original_on_key_press = self.on_key_press
         def _guarded_on_key_press(key):
-            focused = self._terminal_focused()
-            print(f"[KB-DEBUG] key={key!r} focused={focused}", flush=True)
-            if focused:
+            # pynput sees every key system-wide; act only when the Dashboard
+            # window has focus, and never print or log the key itself.
+            if self._terminal_focused():
                 try:
                     return _original_on_key_press(key)
                 except Exception as e:
-                    print(f"[KB-DEBUG] on_key_press raised: {e!r}", flush=True)
+                    print(f"[KEYBOARD] key handler error: {type(e).__name__}", flush=True)
         kbl = keyboard.Listener(on_press=_guarded_on_key_press)
         kbl.daemon = True
         kbl.start()
@@ -780,6 +800,20 @@ Consider: Is it safe to resume? Is the drift acceptable? Is this a pattern?
     #  LLM
     # =========================================================
 
+    def _ollama_model_digest(self):
+        """Digest of the local Ollama model named LLM_MODEL, or None if unavailable."""
+        try:
+            with urllib.request.urlopen(f"{LLM_URL}/api/tags", timeout=5) as resp:
+                models = json.loads(resp.read().decode("utf-8")).get("models", [])
+            want = LLM_MODEL if ":" in LLM_MODEL else LLM_MODEL + ":latest"
+            for m in models:
+                if m.get("name") in (LLM_MODEL, want) or m.get("model") in (LLM_MODEL, want):
+                    return m.get("digest")
+            self.get_logger().warn(f"[LLM] model {LLM_MODEL} not found in Ollama /api/tags")
+        except Exception as e:
+            self.get_logger().warn(f"[LLM] could not read model digest: {e}")
+        return None
+
     def trigger_llm(self):
         if self.llm_running: return
 
@@ -840,6 +874,7 @@ Consider: Is it safe to resume? Is the drift acceptable? Is this a pattern?
         threading.Thread(target=self._llm_worker, daemon=True).start()
 
     def _llm_worker(self):
+        self._last_llm_meta = None
         was_reentry   = self.post_signal_loss_reentry
         fallback_used = False
 
@@ -877,28 +912,35 @@ Consider: Is it safe to resume? Is the drift acceptable? Is this a pattern?
                 tag = " [RE-ENTRY]" if was_reentry else ""
                 self.log_event(f"LLM{tag} ({confidence}%): {intent.name}. {reasoning[:80]}")
 
-            self.last_llm_reasoning  = reasoning
-            self.last_llm_confidence = confidence
-            self.last_llm_checkpoint = checkpoint
-            self.last_llm_intent_num = intent.value
-            self.post_signal_loss_reentry = False
+            # A6: if the operator took control while the LLM was thinking, the
+            # result is stale. Log it, but do not move the vehicle or change state.
+            applied = self.drone_state != DroneState.MANUAL
+            if not applied:
+                new_target, wp_name = None, "None (discarded: operator in control)"
+                self.log_event(f"Agent decision discarded: operator in control ({intent.name}).")
+            else:
+                self.last_llm_reasoning  = reasoning
+                self.last_llm_confidence = confidence
+                self.last_llm_checkpoint = checkpoint
+                self.last_llm_intent_num = intent.value
+                self.post_signal_loss_reentry = False
 
-            # Overrides are NOT cleared here.
-            # They stay locked until operator presses R.
-            # This keeps the forced value stable across multiple LLM queries.
+                # Overrides are NOT cleared here.
+                # They stay locked until operator presses R.
+                # This keeps the forced value stable across multiple LLM queries.
 
-            new_target, wp_name  = self._generate_waypoint(intent)
-            self.last_llm_wp_name = wp_name
-            self.current_intent   = intent
-            self.target_pos       = new_target
-            self.current_wp_name  = wp_name
-            self.last_llm_time    = time.time()
-            self.dwell_active     = False
-            self.dwell_logged     = False
-            self.drone_state      = DroneState.AUTO_FLYING
+                new_target, wp_name  = self._generate_waypoint(intent)
+                self.last_llm_wp_name = wp_name
+                self.current_intent   = intent
+                self.target_pos       = new_target
+                self.current_wp_name  = wp_name
+                self.last_llm_time    = time.time()
+                self.dwell_active     = False
+                self.dwell_logged     = False
+                self.drone_state      = DroneState.AUTO_FLYING
 
-            self.waypoint_depart_time     = time.time()
-            self.signal_loss_since_depart = False
+                self.waypoint_depart_time     = time.time()
+                self.signal_loss_since_depart = False
 
             # Record to dataset
             rid = self.dataset.record_decision(
@@ -926,31 +968,39 @@ Consider: Is it safe to resume? Is the drift acceptable? Is this a pattern?
                 response_time_seconds  = response_time,
                 fallback_used          = fallback_used,
                 was_reentry            = was_reentry,
+                llm_meta               = self._last_llm_meta,
+                applied                = applied,
             )
-            self.current_record_id = rid
+            if applied:
+                self.current_record_id = rid
             self.get_logger().info(
                 f"[DATASET] Decision #{self.dataset.decision_count} recorded "
                 f"(conf={confidence}% fallback={fallback_used})"
             )
 
-            self._print_pilot_decision_banner(
-                intent, wp_name, new_target,
-                confidence, reasoning, checkpoint,
-                fallback_used, was_reentry
-            )
+            if applied:
+                self._print_pilot_decision_banner(
+                    intent, wp_name, new_target,
+                    confidence, reasoning, checkpoint,
+                    fallback_used, was_reentry
+                )
 
         except Exception as e:
             response_time = time.time() - self.llm_query_start_time
             self.get_logger().warn(f"[LLM] Failed: {e} → HOLD_SAFE")
             self.log_event(f"LLM failed: {e} — HOLD_SAFE")
-            self.post_signal_loss_reentry = False
             # Overrides NOT cleared on failure — operator must press R
-            intent = Intent.HOLD_SAFE
-            new_target, wp_name  = self._generate_waypoint(intent)
-            self.current_intent  = intent
-            self.target_pos      = new_target
-            self.current_wp_name = wp_name
-            self.drone_state     = DroneState.AUTO_FLYING
+            intent  = Intent.HOLD_SAFE
+            applied = self.drone_state != DroneState.MANUAL
+            if applied:
+                self.post_signal_loss_reentry = False
+                new_target, wp_name  = self._generate_waypoint(intent)
+                self.current_intent  = intent
+                self.target_pos      = new_target
+                self.current_wp_name = wp_name
+                self.drone_state     = DroneState.AUTO_FLYING
+            else:
+                wp_name = "None (discarded: operator in control)"
             rid = self.dataset.record_decision(
                 flight_time_str=self._flight_time_str(),
                 battery_pct=snap_batt, ekf_confidence=snap_ekf,
@@ -964,8 +1014,10 @@ Consider: Is it safe to resume? Is the drift acceptable? Is this a pattern?
                 reasoning=f"LLM failed: {e}. HOLD_SAFE fallback.",
                 confidence=99, checkpoint="Until LLM recovers",
                 response_time_seconds=response_time, fallback_used=True, was_reentry=was_reentry,
+                llm_meta=self._last_llm_meta, applied=applied,
             )
-            self.current_record_id = rid
+            if applied:
+                self.current_record_id = rid
 
         finally:
             self.llm_running = False
@@ -1046,18 +1098,32 @@ IMPORTANT RULES:
 Think like an experienced pilot. Respond ONLY with valid JSON:
 {{"intent":<1-7>,"reasoning":"<one clear paragraph>","confidence":<0-100>,"next_checkpoint":"<when to reconsider>"}}"""
 
+        self._last_llm_meta = {
+            "model": LLM_MODEL,
+            "model_digest": self.llm_model_digest,
+            "options": dict(LLM_OPTIONS),
+            "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+            "prompt_code_sha256": self.prompt_code_sha256,
+        }
         payload = json.dumps({
-            "model": "llama3",
+            "model": LLM_MODEL,
             "prompt": prompt,
-            "stream": False
+            "stream": False,
+            "options": LLM_OPTIONS,
         }).encode("utf-8")
         req = urllib.request.Request(
-            "http://localhost:11434/api/generate",
+            f"{LLM_URL}/api/generate",
             data=payload,
             headers={"Content-Type": "application/json"}
         )
         with urllib.request.urlopen(req, timeout=60) as resp:
             api_result = json.loads(resp.read().decode("utf-8"))
+        self._last_llm_meta.update({
+            "response_model": api_result.get("model"),
+            "prompt_eval_count": api_result.get("prompt_eval_count"),
+            "eval_count": api_result.get("eval_count"),
+            "total_duration_s": (api_result.get("total_duration") or 0) / 1e9,
+        })
         response   = api_result.get("response", "").strip()
         json_match = re.search(r'\{[^{}]*"intent"[^{}]*\}', response, re.DOTALL)
         if not json_match:
