@@ -1,27 +1,87 @@
-#!/usr/bin/env python3
 """
-EGLe Controller Input Thread
-Replaces keyboard input with ShanWan Readgear gamepad
-Drop-in replacement for the pynput keyboard listener in autonomous_uav_stage5.py
-"""
+Xbox 360 controller input for the UAV-Triage pilot script.
 
-import pygame
+Every controller action is converted into the SAME key event the keyboard would
+send and passed to the pilot script's own on_key_press(). So the controller
+behaves exactly like the verified keyboard controls: taking manual control,
+the idle hand-back timer, logging, dataset records, and fault injection.
+
+Layout (standard "Mode 2" flight controls, relative to where the drone faces):
+  Left stick up/down      climb / descend (throttle)
+  Left stick left/right   turn left / right (yaw)
+  Right stick up/down     fly forward / back (pitch)
+  Right stick left/right  fly sideways left / right (roll)
+  A  hold position (1)        X  search next sector (3)
+  B  return to base (6)       Y  re-decide now (F)
+  LB + RB together     emergency land (7)
+  Back                 progress stats (H)
+  Start                not used in flight (it's the mission START button)
+Fault injection (T/Y/Z/R) stays keyboard-only for the researcher.
+
+Sticks glide the target smoothly (proportional, with a short leash ahead of the drone).
+Works without window focus.
+
+Check your controller's numbering:
+    python3 controller_input.py --detect
+"""
+import math
+import os
+import sys
 import threading
 import time
 
-# Deadzone for analog sticks — ignore small movements
-DEADZONE = 0.15
-# Step size per update cycle (matches keyboard step)
-STEP = 0.5
+os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+os.environ.setdefault("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1")
+os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+import pygame
+from pynput import keyboard
+
+# ---- Xbox 360 on Linux (xpad driver) ----
+AX_LEFT_X, AX_LEFT_Y = 0, 1
+AX_RIGHT_X, AX_RIGHT_Y = 3, 4
+BTN_A, BTN_B, BTN_X, BTN_Y = 0, 1, 2, 3
+BTN_LB, BTN_RB, BTN_BACK, BTN_START = 4, 5, 6, 7
+
+DEADZONE = 0.20
+POLL_HZ = 20
+EXPO = 2.0            # stick curve: >1 = finer control near centre (1 = linear)
+
+# Smooth mode: the target glides every cycle and stays on a short leash ahead of the drone
+MAX_SPEED = 8.0       # m/s horizontal at full stick
+MAX_CLIMB = 2.0       # m/s vertical at full stick
+LEASH_XY = 8.0        # max metres the target may lead the drone horizontally
+LEASH_Z = 3.0         # max metres the target may lead the drone vertically
+MAX_YAW_RATE = 60.0   # deg/s turn rate at full stick
+IDLE_RESET_S = 0.5    # sticks centred this long = next movement starts a new "burst"
+
+# Fallback only (if the pilot script lacks target_pos/current_pos/last_key_time)
+MAX_MOVE_RATE = 8.0
+MAX_ALT_RATE = 3.0
+
+# The pilot script's key handler: up = +north, down = -north,
+# left = +east, right = -east, 'w' = climb, 's' = descend.
+K_NORTH, K_SOUTH = keyboard.Key.up, keyboard.Key.down
+K_EAST, K_WEST = keyboard.Key.left, keyboard.Key.right
+K_CLIMB, K_DESCEND = keyboard.KeyCode.from_char('w'), keyboard.KeyCode.from_char('s')
+
+BUTTON_KEYS = {
+    BTN_A: keyboard.KeyCode.from_char('1'),
+    BTN_X: keyboard.KeyCode.from_char('3'),
+    BTN_B: keyboard.KeyCode.from_char('6'),
+    BTN_Y: keyboard.KeyCode.from_char('f'),
+    BTN_BACK: keyboard.KeyCode.from_char('h'),
+}
+EMERGENCY_LAND = keyboard.KeyCode.from_char('7')
+
 
 class ControllerInput:
-    def __init__(self, node):
-        """
-        node: reference to your UAVControlNode instance
-        Provides same interface as keyboard listener
-        """
+    def __init__(self, node, joystick=None):
         self.node = node
         self.running = True
+        self._joystick = joystick          # injectable for testing
+        self._acc = {}                     # per-direction step accumulators (fallback)
+        self._burst = False
+        self._idle = 0.0
         self._thread = threading.Thread(target=self._loop, daemon=True)
 
     def start(self):
@@ -30,91 +90,188 @@ class ControllerInput:
     def stop(self):
         self.running = False
 
-    def _apply_deadzone(self, val):
-        return val if abs(val) > DEADZONE else 0.0
+    def _log(self, msg):
+        try:
+            self.node.get_logger().info(msg)
+        except Exception:
+            print(msg)
 
-    def _loop(self):
-        pygame.init()
-        pygame.joystick.init()
+    def _send(self, key):
+        try:
+            self.node.on_key_press(key)
+        except Exception as e:
+            self._log(f"[CONTROLLER] key handler error: {e!r}")
 
-        if pygame.joystick.get_count() == 0:
-            print("[CONTROLLER] No joystick found — falling back to keyboard")
+    def _axis(self, j, idx):
+        v = j.get_axis(idx) if idx < j.get_numaxes() else 0.0
+        return 0.0 if abs(v) < DEADZONE else v
+
+    def _smooth_ok(self):
+        n = self.node
+        return all(hasattr(n, a) for a in ("target_pos", "current_pos", "last_key_time"))
+
+    @staticmethod
+    def _curve(v):
+        return (abs(v) ** EXPO) * (1 if v > 0 else -1) if v else 0.0
+
+    def _commanded_yaw(self):
+        """The heading the pilot script is currently sending to PX4 (see its sp.yaw line)."""
+        n = self.node
+        if getattr(n, "manual_yaw", None) is not None and self._in_manual():
+            return n.manual_yaw
+        if getattr(n, "loitering", False) and hasattr(n, "circle_angle"):
+            return n.circle_angle + math.pi / 2.0
+        return 0.0
+
+    def _in_manual(self):
+        return getattr(getattr(self.node, "drone_state", None), "name", "") == "MANUAL"
+
+    def _smooth(self, fwd, right, up, turn, dt):
+        n = self.node
+        active = bool(fwd or right or up or turn)
+        now = time.time()
+        if not active:
+            self._idle += dt
+            if self._burst and self._idle > IDLE_RESET_S:
+                self._burst = False
+            if not self._burst and not self._in_manual() and hasattr(n, "manual_yaw"):
+                n.manual_yaw = None               # AI flying: it controls heading again
             return
+        self._idle = 0.0
+        if not self._burst:
+            start_yaw = self._commanded_yaw()     # keep the heading the drone already has
+            # One real key press through the pilot script so MANUAL takeover and
+            # logging happen exactly as with the keyboard.
+            dom = max((abs(fwd), K_NORTH if fwd > 0 else K_SOUTH),
+                      (abs(right), K_EAST if right > 0 else K_WEST),
+                      (abs(up), K_CLIMB if up > 0 else K_DESCEND),
+                      (abs(turn), K_NORTH), key=lambda t: t[0])[1]
+            self._send(dom)
+            if hasattr(n, "loitering"):
+                n.loitering = False               # stop the hold-circle rewriting the target
+            n.manual_yaw = start_yaw
+            cur = list(n.current_pos)
+            n.target_pos[0], n.target_pos[1], n.target_pos[2] = cur[0], cur[1], cur[2]
+            self._burst = True
+        n.last_key_time = now                      # keeps the AI from taking over
 
+        # Turn
+        yaw = n.manual_yaw + self._curve(turn) * math.radians(MAX_YAW_RATE) * dt
+        n.manual_yaw = math.atan2(math.sin(yaw), math.cos(yaw))   # wrap to [-pi, pi]
+
+        # Body-frame stick -> world north/east (PX4 yaw: 0 = north, + = clockwise)
+        f = self._curve(fwd) * MAX_SPEED * dt
+        r = self._curve(right) * MAX_SPEED * dt
+        c, sn = math.cos(n.manual_yaw), math.sin(n.manual_yaw)
+        cur = n.current_pos
+        t = n.target_pos
+        t[0] += c * f - sn * r
+        t[1] += sn * f + c * r
+        t[2] -= self._curve(up) * MAX_CLIMB * dt   # NED: up = more negative
+
+        # Leash: never let the target run far ahead of the drone
+        dx, dy = t[0] - cur[0], t[1] - cur[1]
+        d = (dx * dx + dy * dy) ** 0.5
+        if d > LEASH_XY:
+            t[0] = cur[0] + dx * LEASH_XY / d
+            t[1] = cur[1] + dy * LEASH_XY / d
+        dz = t[2] - cur[2]
+        if abs(dz) > LEASH_Z:
+            t[2] = cur[2] + (LEASH_Z if dz > 0 else -LEASH_Z)
+        if t[2] > -1.0:                            # never command below 1 m altitude
+            t[2] = -1.0
+
+    def _drive(self, name, value, key_pos, key_neg, max_rate, dt):
+        """Proportional stepping: accumulate deflection, emit one key per whole step."""
+        acc = self._acc.get(name, 0.0)
+        if value == 0.0 or (acc != 0.0 and (acc > 0) != (value > 0)):
+            acc = 0.0
+        acc += value * max_rate * dt
+        while acc >= 1.0:
+            self._send(key_pos); acc -= 1.0
+        while acc <= -1.0:
+            self._send(key_neg); acc += 1.0
+        self._acc[name] = acc
+
+    def _open(self):
+        if self._joystick is not None:
+            return self._joystick
+        pygame.display.init()
+        pygame.joystick.init()
+        if pygame.joystick.get_count() == 0:
+            self._log("[CONTROLLER] No controller found — keyboard only")
+            return None
         j = pygame.joystick.Joystick(0)
         j.init()
-        print(f"[CONTROLLER] Connected: {j.get_name()}")
-        print("[CONTROLLER] Left stick = move XY | Right stick = yaw/altitude")
-        print("[CONTROLLER] X=Battery spoof | O=EKF spoof | △=Reset | L1=Force LLM")
+        self._log(f"[CONTROLLER] Connected: {j.get_name()} "
+                  f"({j.get_numaxes()} axes, {j.get_numbuttons()} buttons)")
+        return j
 
-        prev_buttons = [0] * j.get_numbuttons()
+    def step(self, j, prev, dt):
+        """One polling cycle. Returns the current button states."""
+        # Sticks. Pygame Y axes are negative when pushed UP.
+        fwd = -self._axis(j, AX_RIGHT_Y)      # pitch
+        right = self._axis(j, AX_RIGHT_X)     # roll
+        up = -self._axis(j, AX_LEFT_Y)        # throttle
+        turn = self._axis(j, AX_LEFT_X)       # yaw (+ = clockwise)
+        if self._smooth_ok():
+            self._smooth(fwd, right, up, turn, dt)
+        else:
+            self._drive("ns", fwd, K_NORTH, K_SOUTH, MAX_MOVE_RATE, dt)
+            self._drive("ew", right, K_EAST, K_WEST, MAX_MOVE_RATE, dt)
+            self._drive("alt", up, K_CLIMB, K_DESCEND, MAX_ALT_RATE, dt)
 
+        buttons = [j.get_button(i) for i in range(j.get_numbuttons())]
+        def pressed(i):
+            return i < len(buttons) and buttons[i] and not prev[i]
+
+        both_bumpers = (buttons[BTN_LB] and buttons[BTN_RB]) if len(buttons) > BTN_RB else False
+        was_both = (prev[BTN_LB] and prev[BTN_RB]) if len(prev) > BTN_RB else False
+        if both_bumpers and not was_both:
+            self._log("[CONTROLLER] LB+RB → emergency land")
+            self._send(EMERGENCY_LAND)
+        for btn, key in BUTTON_KEYS.items():
+            if pressed(btn):
+                self._send(key)
+        return buttons
+
+    def _loop(self):
+        j = self._open()
+        if j is None:
+            return
+        prev = [0] * j.get_numbuttons()
+        dt = 1.0 / POLL_HZ
         while self.running:
+            if self._joystick is None:
+                pygame.event.pump()
+            prev = self.step(j, prev, dt)
+            time.sleep(dt)
+
+
+def _detect():
+    pygame.display.init(); pygame.joystick.init()
+    if pygame.joystick.get_count() == 0:
+        sys.exit("No controller found.")
+    j = pygame.joystick.Joystick(0); j.init()
+    print(f"{j.get_name()}: {j.get_numaxes()} axes, {j.get_numbuttons()} buttons. Ctrl+C to exit.")
+    print("Move ONE stick at a time; note which axis number changes.")
+    last = None
+    try:
+        while True:
             pygame.event.pump()
+            axes = tuple(round(j.get_axis(i), 1) for i in range(j.get_numaxes()))
+            btns = [i for i in range(j.get_numbuttons()) if j.get_button(i)]
+            state = (axes, tuple(btns))
+            if state != last:
+                print("axes " + " ".join(f"{i}:{v:+.1f}" for i, v in enumerate(axes)), "| buttons", btns)
+                last = state
+            time.sleep(0.05)
+    except KeyboardInterrupt:
+        pass
 
-            # ── Analog sticks → target position ──────────────────
-            lx = self._apply_deadzone(j.get_axis(0))   # left stick X → Y axis (strafe)
-            ly = self._apply_deadzone(j.get_axis(1))   # left stick Y → X axis (forward/back)
-            rx = self._apply_deadzone(j.get_axis(2))   # right stick X → yaw (ignored for now)
-            ry = self._apply_deadzone(j.get_axis(3))   # right stick Y → altitude
 
-            moved = False
-            if ly != 0.0:
-                self.node.target_pos[0] -= ly * STEP   # forward/back (NED: -ly = forward)
-                moved = True
-            if lx != 0.0:
-                self.node.target_pos[1] += lx * STEP   # strafe left/right
-                moved = True
-            if ry != 0.0:
-                self.node.target_pos[2] += ry * STEP   # altitude (NED: positive = down)
-                moved = True
-
-            if moved:
-                self.node.last_input_time = time.time()
-                if self.node.autonomous_mode:
-                    self.node.autonomous_mode = False
-                    print("[CONTROLLER] Manual override — autonomous mode OFF")
-
-            # ── Buttons (edge-triggered — fires once on press) ────
-            buttons = [j.get_button(i) for i in range(j.get_numbuttons())]
-
-            def pressed(idx):
-                return buttons[idx] == 1 and prev_buttons[idx] == 0
-
-            # X button (0) → Battery spoof Y
-            if pressed(0):
-                print("[CONTROLLER] X pressed → Battery spoof (Y key)")
-                self.node.battery_override = True
-                self.node.battery_override_value = 10.0
-
-            # O button (1) → EKF spoof T
-            if pressed(1):
-                print("[CONTROLLER] O pressed → EKF spoof (T key)")
-                self.node.ekf_override = True
-                self.node.ekf_override_value = 0.2
-
-            # △ button (3) → Reset R
-            if pressed(3):
-                print("[CONTROLLER] △ pressed → Reset overrides (R key)")
-                self.node.battery_override = False
-                self.node.ekf_override = False
-
-            # L1 button (4) → Force LLM re-query F
-            if pressed(4):
-                print("[CONTROLLER] L1 pressed → Force LLM re-query (F key)")
-                self.node.force_llm_requery = True
-
-            # Button 6 → Land (Space)
-            if pressed(6):
-                print("[CONTROLLER] Button 6 → Land")
-                self.node.target_pos[2] = 0.0
-
-            # Button 7 → Quit
-            if pressed(7):
-                print("[CONTROLLER] Button 7 → Quit")
-                self.node.running = False
-
-            prev_buttons = buttons[:]
-            time.sleep(0.05)   # 20 Hz polling
-
-        pygame.quit()
+if __name__ == "__main__":
+    if "--detect" in sys.argv:
+        _detect()
+    else:
+        print(__doc__)
