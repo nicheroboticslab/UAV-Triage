@@ -13,11 +13,13 @@ from px4_msgs.msg import (
 )
 import time
 import subprocess
+import urllib.request
 import re
 import json
 import math
 import threading
 import os
+from nofly_monitor import NoFlyMonitor
 from datetime import datetime
 from pynput import keyboard
 from enum import Enum
@@ -39,21 +41,36 @@ class Intent(Enum):
 # ============================================================
 #  MAP DEFINITION
 # ============================================================
-MAP = {
-    "sectors": [
-        {"id": 0, "name": "SECTOR_A", "priority": 1, "pos": [100.0,   0.0, -10.0]},
-        {"id": 1, "name": "SECTOR_B", "priority": 2, "pos": [ 50.0, 100.0, -10.0]},
-        {"id": 2, "name": "SECTOR_C", "priority": 3, "pos": [  0.0,-100.0, -10.0]},
-        {"id": 3, "name": "SECTOR_D", "priority": 4, "pos": [-100.0,  0.0, -10.0]},
-        {"id": 4, "name": "SECTOR_E", "priority": 5, "pos": [ 80.0,  80.0, -10.0]},
-    ],
-    "base":        [0.0,  0.0,  -5.0],
-    "comms_point": [30.0, 30.0, -25.0],
-    "targets": [
-        {"id": 0, "pos": [ 60.0,  40.0, -8.0], "confirmed": False},
-        {"id": 1, "pos": [-40.0,  60.0, -8.0], "confirmed": False},
-    ],
-}
+# ============================================================
+#  SCENARIO — loaded from ~/UAV-Triage/scenario.json
+#  Edit that file to change sectors, targets, comms point, home.
+# ============================================================
+import json as _json
+import math as _math
+
+SCENARIO_FILE = os.environ.get("UAV_SCENARIO", os.path.expanduser("~/UAV-Triage/scenario.json"))
+
+def _load_scenario(path):
+    with open(path) as f:
+        sc = _json.load(f)
+    hlat, hlon = sc["home"]["lat"], sc["home"]["lon"]
+    cruise = float(sc.get("cruise_alt_m", 10.0))
+    m_lat = 111320.0
+    m_lon = 111320.0 * _math.cos(_math.radians(hlat))
+    def ned(p, default_alt):   # GPS -> local [north, east, down] metres from home
+        return [round((p["lat"] - hlat) * m_lat, 1),
+                round((p["lon"] - hlon) * m_lon, 1),
+                -float(p.get("alt_m", default_alt))]
+    return {
+        "sectors": [{"id": i, "name": s["name"], "priority": s["priority"], "pos": ned(s, cruise)}
+                    for i, s in enumerate(sc["sectors"])],
+        "base": [0.0, 0.0, -float(sc.get("base", {}).get("alt_m", 5.0))],
+        "comms_point": ned(sc["comms_point"], 25.0),
+        "targets": [{"id": i, "pos": ned(t, 8.0), "confirmed": False}
+                    for i, t in enumerate(sc.get("targets", []))],
+    }
+
+MAP = _load_scenario(SCENARIO_FILE)
 
 # ============================================================
 #  THRESHOLDS & TIMINGS
@@ -327,10 +344,32 @@ class UAVAutonomousNode(Node):
         self.counter      = 0
         self.timer_period = 0.05
         self.timer = self.create_timer(self.timer_period, self.loop)
+        self.nofly = NoFlyMonitor(DATASET_DIR, self.get_logger(), self.log_event)
 
-        kbl = keyboard.Listener(on_press=self.on_key_press)
+        def _terminal_focused():
+            try:
+                result = subprocess.run(
+                    ['xdotool', 'getactivewindow', 'getwindowname'],
+                    capture_output=True, text=True, timeout=0.5
+                )
+                return 'Dashboard' in result.stdout
+            except Exception:
+                return False
+        self._terminal_focused = _terminal_focused
+        _original_on_key_press = self.on_key_press
+        def _guarded_on_key_press(key):
+            focused = self._terminal_focused()
+            print(f"[KB-DEBUG] key={key!r} focused={focused}", flush=True)
+            if focused:
+                try:
+                    return _original_on_key_press(key)
+                except Exception as e:
+                    print(f"[KB-DEBUG] on_key_press raised: {e!r}", flush=True)
+        kbl = keyboard.Listener(on_press=_guarded_on_key_press)
         kbl.daemon = True
         kbl.start()
+        self.controller = ControllerInput(self)
+        self.controller.start()
 
         self.log_event(f"System started. Battery: {self.battery_pct:.0f}%. EKF: {self.ekf_confidence:.2f}")
         self._write_dashboard_state()
@@ -994,15 +1033,23 @@ IMPORTANT RULES:
 Think like an experienced pilot. Respond ONLY with valid JSON:
 {{"intent":<1-7>,"reasoning":"<one clear paragraph>","confidence":<0-100>,"next_checkpoint":"<when to reconsider>"}}"""
 
-        result = subprocess.run(
-            ["ollama", "run", "llama3"],
-            input=prompt, text=True, capture_output=True, timeout=60
+        payload = json.dumps({
+            "model": "llama3",
+            "prompt": prompt,
+            "stream": False
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            "http://localhost:11434/api/generate",
+            data=payload,
+            headers={"Content-Type": "application/json"}
         )
-        response   = result.stdout.strip()
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            api_result = json.loads(resp.read().decode("utf-8"))
+        response   = api_result.get("response", "").strip()
         json_match = re.search(r'\{[^{}]*"intent"[^{}]*\}', response, re.DOTALL)
         if not json_match:
             raise ValueError(f"No JSON in response: '{response[:150]}'")
-        parsed     = json.loads(json_match.group())
+        parsed     = json.loads(json_match.group(), strict=False)
         intent_num = int(parsed.get("intent", 1))
         reasoning  = str(parsed.get("reasoning", "No reasoning provided."))
         confidence = max(0, min(100, int(parsed.get("confidence", 50))))
@@ -1122,6 +1169,10 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
     # =========================================================
 
     def loop(self):
+        if getattr(self, 'nofly', None) is not None and getattr(self, 'pos_initialized', False):
+            self.nofly.update(self.current_pos, self.drone_state,
+                              time.time() - self.flight_start_time,
+                              getattr(self, 'current_wp_name', None))
         timestamp = int(self.get_clock().now().nanoseconds / 1000)
         now       = time.time()
 
@@ -1293,7 +1344,10 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
         sp           = TrajectorySetpoint()
         sp.timestamp = timestamp
         sp.position  = [float(v) for v in self.target_pos]
-        sp.yaw       = (self.circle_angle + math.pi / 2.0 if self.loitering else 0.0)
+        sp.yaw       = (self.manual_yaw
+                        if (self.drone_state == DroneState.MANUAL
+                            and getattr(self, 'manual_yaw', None) is not None)
+                        else (self.circle_angle + math.pi / 2.0 if self.loitering else 0.0))
         self.traj_pub.publish(sp)
 
         # ---- Arm sequence ----

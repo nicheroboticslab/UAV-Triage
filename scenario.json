@@ -1,0 +1,100 @@
+{
+  "_help": "Edit this file to change the scenario. Coordinates are decimal degrees (Google Maps right-click -> copy). West longitude is negative. Relaunch after editing.",
+  "home": {
+    "name": "Lab",
+    "lat": 42.320306,
+    "lon": -83.234194,
+    "alt_m": 185
+  },
+  "cruise_alt_m": 10,
+  "base": {
+    "alt_m": 5
+  },
+  "sectors": [
+    {
+      "name": "SECTOR_A",
+      "label": "Greenfield Village",
+      "priority": 1,
+      "lat": 42.304306,
+      "lon": -83.231111
+    },
+    {
+      "name": "SECTOR_B",
+      "label": "Fairlane Meadow Apts",
+      "priority": 2,
+      "lat": 42.323694,
+      "lon": -83.2035
+    },
+    {
+      "name": "SECTOR_C",
+      "label": "Edsel Ford HS",
+      "priority": 3,
+      "lat": 42.290536,
+      "lon": -83.234417
+    },
+    {
+      "name": "SECTOR_D",
+      "label": "Ford World HQ",
+      "priority": 4,
+      "lat": 42.314734,
+      "lon": -83.211344
+    },
+    {
+      "name": "SECTOR_E",
+      "label": "Rouge Plant",
+      "priority": 5,
+      "lat": 42.314636,
+      "lon": -83.16248
+    }
+  ],
+  "comms_point": {
+    "lat": 42.320575,
+    "lon": -83.23383,
+    "alt_m": 25
+  },
+  "targets": [
+    {
+      "lat": 42.320845,
+      "lon": -83.233708,
+      "alt_m": 8
+    },
+    {
+      "lat": 42.319947,
+      "lon": -83.233465,
+      "alt_m": 8
+    }
+  ],
+  "no_fly_zones": {
+    "circles": [
+      {
+        "name": "EXAMPLE circle (Area 4 -> 5 leg)",
+        "lat": 42.314682,
+        "lon": -83.186909,
+        "radius_m": 400
+      }
+    ],
+    "polygons": [
+      {
+        "name": "EXAMPLE box (lab -> Area 1 leg)",
+        "points": [
+          [
+            42.311322,
+            -83.236017
+          ],
+          [
+            42.311322,
+            -83.229335
+          ],
+          [
+            42.313568,
+            -83.229335
+          ],
+          [
+            42.313568,
+            -83.236017
+          ]
+        ]
+      }
+    ]
+  }
+}
