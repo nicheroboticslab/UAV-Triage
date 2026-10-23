@@ -83,13 +83,50 @@ def water(name, x, y, sx, sy, category, base=0.0, flow_yaw=0.0, depth=None):
     if top <= base:
         return ""
     tex = os.path.join(WATER_TEX, "flowing.png" if category == "flowing" else "standing.png")
-    return (f'    <model name="{name}"><static>true</static><pose>{x:.2f} {y:.2f} {top / 2:.3f} 0 0 {flow_yaw:.3f}</pose>'
+    extra = debris(name, x, y, sx, sy, top, flow_yaw) if category == "flowing" else ""
+    return extra + (f'    <model name="{name}"><static>true</static><pose>{x:.2f} {y:.2f} {top / 2:.3f} 0 0 {flow_yaw:.3f}</pose>'
             f'<link name="l"><visual name="v"><cast_shadows>false</cast_shadows>'
             f'<transparency>{WATER_TRANSPARENCY}</transparency>'
             f'<geometry><box><size>{sx} {sy} {top:.3f}</size></box></geometry>'
             f'<material><diffuse>1 1 1 1</diffuse><specular>0.35 0.35 0.35 1</specular>'
             f'<pbr><metal><albedo_map>{tex}</albedo_map><roughness>0.2</roughness><metalness>0</metalness></metal></pbr>'
             f'</material></visual></link></model>\n')
+
+
+# Flowing water looks in motion (Ben, 23 Oct 14:16): foam patches and debris
+# drift downstream at FLOW_SPEED_MS and wrap at the end of the patch.
+# tools/flow_animator.py moves them (gz set_pose_vector) using the manifest
+# worlds/egle_<SET>_flow.json written below. Slow, steady, no brightness
+# change, so nothing flashes (E7).
+FLOW_SPEED_MS = 1.5
+FLOW_ITEMS = []            # filled while building the world; written as the manifest
+
+
+def debris(name, x, y, sx, sy, top, flow_yaw):
+    rnd = __import__("random").Random(name)          # deterministic per scene
+    n = max(6, int(sx * sy / 120))
+    c, s_ = math.cos(flow_yaw), math.sin(flow_yaw)
+    out, items = "", []
+    for k in range(n):
+        u = rnd.uniform(-sx / 2, sx / 2)              # along the flow
+        v = rnd.uniform(-sy / 2 + 1, sy / 2 - 1)      # across
+        dname = f"{name}_deb{k}"
+        if k % 3 == 2:                                # branch / log
+            geo = f'<cylinder><radius>0.12</radius><length>{rnd.uniform(1.2, 2.4):.2f}</length></cylinder>'
+            rgba, rpy = "0.32 0.24 0.16 1", f"0 1.5708 {rnd.uniform(-0.6, 0.6):.2f}"
+        else:                                         # foam patch
+            r = rnd.uniform(0.35, 0.8)
+            geo = f'<cylinder><radius>{r:.2f}</radius><length>0.03</length></cylinder>'
+            rgba, rpy = FOAM_RGBA, "0 0 0"
+        px, py = x + c * u - s_ * v, y + s_ * u + c * v
+        out += (f'    <model name="{dname}"><static>false</static><pose>{px:.2f} {py:.2f} {top + 0.02:.3f} {rpy}</pose>'
+                f'<link name="l"><gravity>false</gravity><kinematic>true</kinematic>'
+                f'<visual name="v"><cast_shadows>false</cast_shadows><geometry>{geo}</geometry>'
+                f'<material><ambient>{rgba}</ambient><diffuse>{rgba}</diffuse></material></visual></link></model>\n')
+        items.append({"name": dname, "u": round(u, 3), "v": round(v, 3), "rpy": [float(a) for a in rpy.split()]})
+    FLOW_ITEMS.append({"water": name, "x": x, "y": y, "length": sx, "width": sy, "z": round(top + 0.02, 3),
+                       "flow_yaw": flow_yaw, "speed_ms": FLOW_SPEED_MS, "items": items})
+    return out
 
 
 def flood_sheet():
@@ -146,40 +183,13 @@ def building(prefix, x, y):
 # outcome code -> scene builder(prefix, x, y, truth)
 def t_S2a(p, x, y, t):   # N people at the entrance, standing in the water
     return (building(p, x, y) + water(f"{p}_w", x, y - 8, 34, 16, t["water"], depth=depth_for(t))
-            + people(p, x, y - 1.5, t["people"], water=(t["water"], 0.0, depth_for(t))))
+            + group(p, x, y - 1.5, t))
 
 def t_S2c(p, x, y, t):   # N people nearby, outside the building, standing in the water
     return (building(p, x, y) + water(f"{p}_w", x + 4, y - 8, 40, 16, t["water"], depth=depth_for(t))
-            + people(p, x + 14, y - 6, t["people"], water=(t["water"], 0.0, depth_for(t))))
+            + group(p, x + 14, y - 6, t))
 
-def t_S4b(p, x, y, t):   # bridge awash with N people on it; channel flows +x, bridge runs along y
-    deck, length, width = 0.6, 28.0, 3.0
-    cat = t["water"]
-    base = deck if cat == "flowing" else 0.0
-    rail = "0.75 0.75 0.72 1"
-    out = box(f"{p}_bridge", x, y, deck / 2, width, length, deck, "0.45 0.40 0.35 1")
-    for side in (-1, 1):                              # railings stand well above the water
-        rx = x + side * (width / 2 - 0.05)
-        out += box(f"{p}_rail{side + 1}", rx, y, deck + 1.1, 0.08, length, 0.08, rail, collide=False)
-        for k in range(int(length // 2) + 1):
-            out += box(f"{p}_post{side + 1}_{k}", rx, y - length / 2 + 2 * k, deck + 0.55, 0.1, 0.1, 1.1, rail, collide=False)
-    for end in (-1, 1):                               # banks / abutments, dry, above the water
-        out += box(f"{p}_bank{end + 1}", x, y + end * (length / 2 + 1), 0.6, 12, 6, 1.2, "0.42 0.40 0.34 1")
-    dep = depth_for(t)
-    out += water(f"{p}_w", x, y, 60, length - 6, cat, base=base, depth=dep)      # channel between the banks
-    if cat == "flowing":                              # foam piled against the upstream side of the deck
-        out += box(f"{p}_pile", x - width / 2 - 0.4, y, water_top(cat, base, dep) + 0.01, 0.8, length - 6, 0.02,
-                   FOAM_RGBA, collide=False)
-    top = water_top(cat, base, dep)
-    n = t["people"]
-    for i in range(n):                                # people spaced along the deck
-        py = y + (i - (n - 1) / 2) * 2.0
-        out += include(PERSON, f"{p}_p{i}", x, py, deck, yaw=0.0)
-        if top is not None and top > deck:
-            out += foam(f"{p}_p{i}_foam", x, py, top, cat == "flowing", 0.0)
-    return out
-
-TEMPLATES = {"S2a": t_S2a, "S2c": t_S2c, "S4b": t_S4b}
+TEMPLATES = {"S2a": t_S2a, "S2c": t_S2c}
 # Scene footprint (xmin, xmax, ymin, ymax) relative to the anchor, used to keep
 # the whole scene clear of real (OSM) buildings. Placeholder buildings excluded.
 EXTENT = {"S2a": (-17, 17, -16, 0), "S2c": (-16, 24, -16, 0),
@@ -205,29 +215,133 @@ def include_rpy(uri, name, x, y, z, roll=0.0, pitch=0.0, yaw=0.0):
             f'<pose>{x:.2f} {y:.2f} {z:.2f} {roll:.4f} {pitch:.4f} {yaw:.3f}</pose><static>true</static></include>\n')
 
 
-def person(name, x, y, z=0.0, pose="standing", yaw=1.57, top=None, flowing=False):
-    """One person; pose: standing | sitting | lying. Foam ring if standing in water (top > z)."""
-    if pose == "sitting":
-        out = include(PERSON_SIT, name, x, y, z, yaw)
-    elif pose == "lying":
-        out = include_rpy(PERSON, name, x, y, z + 0.15, pitch=-1.5708, yaw=yaw)
+POLE_RGBA = "0.55 0.56 0.58 1"
+
+
+def pole(name, x, y, h=2.6):
+    """Something to hold in a current: a sign/utility pole."""
+    return (f'    <model name="{name}"><static>true</static><pose>{x:.2f} {y:.2f} {h / 2:.2f} 0 0 0</pose>'
+            f'<link name="l"><collision name="c"><geometry><cylinder><radius>0.07</radius><length>{h}</length></cylinder></geometry></collision>'
+            f'<visual name="v"><geometry><cylinder><radius>0.07</radius><length>{h}</length></cylinder></geometry>'
+            f'<material><ambient>{POLE_RGBA}</ambient><diffuse>{POLE_RGBA}</diffuse></material></visual></link></model>\n')
+
+
+# ---- People: one body model for everyone, condition shown by pose and aids ----
+# Animated Gazebo actors (Fuel "Mingfei/actor", the model used in Gazebo's own
+# actor examples). Every person uses the same body, so clothing never reveals the
+# condition. USE_ACTORS = False falls back to static Rescue Randy models.
+#   mobile               -> standing, gesturing (talk_b, animated)
+#   immobile, responsive -> standing still with a walker (dry, roof, ankle-deep) or a
+#                           cane (waist-deep and deeper); seated only inside a car
+#   unresponsive         -> lying flat, motionless
+USE_ACTORS = True
+ACTOR = "https://fuel.gazebosim.org/1.0/Mingfei/models/actor/tip/files/meshes"
+ACTOR_CLIP = {"standing": "talk_b", "still": "stand", "sitting": "sitting", "lying": "stand"}
+ACTOR_ROOT_Z = {"standing": 1.0, "still": 1.0, "sitting": 0.55, "lying": 0.18}   # actor root (hips) above its feet/seat
+ACTOR_YAW = 0.0            # added to every yaw if the mesh's forward axis differs (tune in Gazebo)
+AID_RGBA = "0.78 0.80 0.82 1"
+WALKER_MAX_DEPTH = 0.3     # walker in ankle-deep water; cane when deeper (a walker would be underwater)
+
+
+FAST_CLIPS = os.path.join(REPO, "models", "egle_people", "meshes")   # tools/make_actor_clips.py
+
+
+def clip_file(clip):
+    fast = os.path.join(FAST_CLIPS, f"{clip}_fast.dae")
+    return fast if os.path.exists(fast) else f"{ACTOR}/{clip}.dae"
+
+
+def actor(name, clip, x, y, z, roll=0.0, pitch=0.0, yaw=0.0):
+    f = clip_file(clip)
+    pose = f"{x:.2f} {y:.2f} {z:.2f} {roll:.4f} {pitch:.4f} {yaw + ACTOR_YAW:.3f}"
+    # Two identical waypoints: the actor stays in place; interpolate_x false plays
+    # the clip on time, so it loops in place.
+    return (f'    <actor name="{name}"><skin><filename>{f}</filename><scale>1.0</scale></skin>'
+            f'<animation name="a"><filename>{f}</filename><interpolate_x>false</interpolate_x></animation>'
+            f'<script><loop>true</loop><auto_start>true</auto_start><trajectory id="0" type="a">'
+            f'<waypoint><time>0</time><pose>{pose}</pose></waypoint>'
+            f'<waypoint><time>3600</time><pose>{pose}</pose></waypoint></trajectory></script></actor>\n')
+
+
+def body(name, x, y, z, kind, yaw):
+    """kind: standing | still | sitting | lying"""
+    if not USE_ACTORS:
+        if kind == "sitting":
+            return include(PERSON_SIT, name, x, y, z, yaw)
+        if kind == "lying":
+            return include_rpy(PERSON, name, x, y, z + 0.15, pitch=-1.5708, yaw=yaw)
+        return include(PERSON, name, x, y, z, yaw)
+    if kind == "lying":
+        return actor(name, ACTOR_CLIP[kind], x, y, z + ACTOR_ROOT_Z[kind], pitch=-1.5708, yaw=yaw)
+    return actor(name, ACTOR_CLIP[kind], x, y, z + ACTOR_ROOT_Z[kind], yaw=yaw)
+
+
+def walker(name, x, y, z, yaw):
+    """Walking frame in front of the person (chunky enough to read from the drone camera)."""
+    c, s_ = math.cos(yaw), math.sin(yaw)
+    def at(dx, dy):
+        return x + c * dx - s_ * dy, y + s_ * dx + c * dy
+    out = ""
+    for k, (dx, dy) in enumerate(((0.35, 0.28), (0.35, -0.28), (0.75, 0.28), (0.75, -0.28))):
+        lx, ly = at(dx, dy)
+        out += box(f"{name}_leg{k}", lx, ly, z + 0.42, 0.06, 0.06, 0.84, AID_RGBA, collide=False)
+    for k, dy in enumerate((0.28, -0.28)):
+        rx, ry = at(0.55, dy)
+        out += box(f"{name}_rail{k}", rx, ry, z + 0.84, 0.46, 0.06, 0.06, AID_RGBA, yaw=yaw, collide=False)
+    fx, fy = at(0.75, 0.0)
+    out += box(f"{name}_front", fx, fy, z + 0.6, 0.06, 0.62, 0.06, AID_RGBA, yaw=yaw, collide=False)
+    return out
+
+
+def cane(name, x, y, z, yaw):
+    c, s_ = math.cos(yaw), math.sin(yaw)
+    cx, cy = x + c * 0.25 - s_ * 0.35, y + s_ * 0.25 + c * 0.35
+    return (box(f"{name}_shaft", cx, cy, z + 0.45, 0.06, 0.06, 0.9, AID_RGBA, collide=False)
+            + box(f"{name}_crook", cx + c * 0.08, cy + s_ * 0.08, z + 0.9, 0.2, 0.06, 0.06, AID_RGBA, yaw=yaw, collide=False))
+
+
+def clinger(name, x, y, z, yaw):
+    """Holding on in a current (Ben, 23 Oct: 'hold onto the railing for dear life').
+    The animated model has no holding clip; the T-pose model spreads both arms
+    along the railing/log. Used only for people in flowing water, which is P1 by
+    the rule anyway, so the body type reveals nothing the water does not."""
+    return include(PERSON, name, x, y, z, yaw)
+
+
+def person(name, x, y, z=0.0, pose="standing", yaw=1.57, top=None, flowing=False, hold=True):
+    """One person. pose: standing (mobile) | impaired (immobile but responsive) |
+    lying (unresponsive) | sitting (forced, e.g. car occupant).
+    Foam ring at the waterline for anyone upright in water. Flowing water: holds a
+    pole unless the scene gives them something (railing, log): hold=False."""
+    in_water = top is not None and top > z
+    if pose == "impaired":
+        # Ben 23 Oct 15:15: impaired people stand with a walker (sitting outdoors read as a
+        # wheelchair without the chair). Waist-deep and deeper the walker would be under
+        # water, so a cane (top above the waterline) is used there.
+        out = body(name, x, y, z, "still", yaw)
+        out += (cane(f"{name}_cane", x, y, z, yaw) if in_water and top - z > WALKER_MAX_DEPTH
+                else walker(f"{name}_walker", x, y, z, yaw))
+    elif pose in ("sitting", "lying"):
+        out = body(name, x, y, z, pose, yaw)
     else:
-        out = include(PERSON, name, x, y, z, yaw)
-    if top is not None and top > z and pose == "standing":
+        out = body(name, x, y, z, "standing", yaw)
+    if in_water and pose in ("standing", "impaired"):
         out += foam(f"{name}_foam", x, y, top, flowing)
+        if flowing and hold:
+            out += pole(f"{name}_pole", x - 0.62 * math.sin(yaw), y + 0.62 * math.cos(yaw), h=z + 2.6)
     return out
 
 
 def poses(n, worst):
-    """Pose per person from the worst condition: one person has it, the rest stand
-    (S6b 'some injured': half sit)."""
+    """Pose per person from the worst condition: one person has it, the rest are
+    mobile (S6b 'some injured': half are impaired)."""
     if n <= 0:
         return []
     if worst == "unresponsive":
         return ["lying"] + ["standing"] * (n - 1)
     if worst == "immobile_responsive":
         k = max(1, n // 2)
-        return ["sitting"] * k + ["standing"] * (n - k)
+        return ["impaired"] * k + ["standing"] * (n - k)
     return ["standing"] * n
 
 
@@ -261,7 +375,7 @@ def car(name, x, y, yaw=0.0, colour=0, occupants=0, top=None):
             f'<material><ambient>{GLASS_RGBA}</ambient><diffuse>{GLASS_RGBA}</diffuse></material></visual></link></model>\n')
     for i in range(occupants):
         sx, sy = at(0.25 - 0.9 * (i // 2), 0.4 if i % 2 == 0 else -0.4)
-        out += include(PERSON_SIT, f"{name}_occ{i}", sx, sy, 0.45, yaw + 3.1416)
+        out += body(f"{name}_occ{i}", sx, sy, 0.45, "sitting", yaw + 3.1416)
     return out
 
 
@@ -292,8 +406,9 @@ def bank_and_channel(p, x, y, t, depth=None):
     d = depth_for(t) if depth is None else depth
     top = water_top(cat, 0.0, d) or FLOOD_BASE_M
     out = water(f"{p}_w", x, y + 7, 44, 14, cat, depth=d)
-    out += box(f"{p}_bank", x, y - 4, (top + 0.25) / 2, 44, 8, top + 0.25, "0.36 0.38 0.27 1")
-    return out, top + 0.25
+    bank = top + 0.08
+    out += box(f"{p}_bank", x, y - 4, bank / 2, 44, 8, bank, "0.30 0.26 0.19 1")
+    return out, bank
 
 
 def bridge(p, x, y, t, deck, awash):
@@ -304,11 +419,13 @@ def bridge(p, x, y, t, deck, awash):
     length, width = 28.0, 3.0
     rail = "0.75 0.75 0.72 1"
     out = box(f"{p}_bridge", x, y, deck / 2, width, length, deck, "0.45 0.40 0.35 1")
+    cling = awash and cat == "flowing"
+    rh = 1.4 if cling else 1.1          # railing at the clingers' outstretched hands
     for side in (-1, 1):
         rx = x + side * (width / 2 - 0.05)
-        out += box(f"{p}_rail{side + 1}", rx, y, deck + 1.1, 0.08, length, 0.08, rail, collide=False)
+        out += box(f"{p}_rail{side + 1}", rx, y, deck + rh, 0.08, length, 0.08, rail, collide=False)
         for k in range(int(length // 2) + 1):
-            out += box(f"{p}_post{side + 1}_{k}", rx, y - length / 2 + 2 * k, deck + 0.55, 0.1, 0.1, 1.1, rail, collide=False)
+            out += box(f"{p}_post{side + 1}_{k}", rx, y - length / 2 + 2 * k, deck + rh / 2, 0.1, 0.1, rh, rail, collide=False)
     for end in (-1, 1):
         out += box(f"{p}_bank{end + 1}", x, y + end * (length / 2 + 1), max(deck, 1.2) / 2, 12, 6, max(deck, 1.2), "0.42 0.40 0.34 1")
     out += water(f"{p}_w", x, y, 60, length - 6, cat, base=base, depth=dep)
@@ -316,9 +433,14 @@ def bridge(p, x, y, t, deck, awash):
     if cat == "flowing" and awash:
         out += box(f"{p}_pile", x - width / 2 - 0.4, y, top + 0.01, 0.8, length - 6, 0.02, FOAM_RGBA, collide=False)
     ps = poses(t["people"], t.get("_worst", "mobile"))
+    px = x + width / 2 - 0.3 if cling else x       # against the downstream railing, arms along it
     for i, ps_i in enumerate(ps):
-        out += person(f"{p}_p{i}", x, y + (i - (len(ps) - 1) / 2) * 2.0, deck, ps_i, yaw=0.0,
-                      top=top if awash else None, flowing=cat == "flowing")
+        py = y + (i - (len(ps) - 1) / 2) * 2.0
+        if cling:
+            out += clinger(f"{p}_p{i}", px, py, deck, 0.0) + foam(f"{p}_p{i}_foam", px, py, top, True)
+        else:
+            out += person(f"{p}_p{i}", px, py, deck, ps_i, yaw=0.0,
+                          top=top if awash else None, flowing=cat == "flowing", hold=False)
     return out
 
 
@@ -369,8 +491,9 @@ def t_S3b(p, x, y, t):   # person in the water holding an object (chest/neck-dee
             f'<link name="l"><visual name="v"><geometry><cylinder><radius>0.22</radius><length>3.0</length></cylinder></geometry>'
             f'<material><ambient>0.30 0.22 0.14 1</ambient><diffuse>0.30 0.22 0.14 1</diffuse></material></visual></link></model>\n')
     for i in range(t["people"]):
-        out += person(f"{p}_p{i}", x + 0.3 + i * 1.2, y + 6, 0.0, "standing", yaw=0.0, top=top,
-                      flowing=t.get("water") == "flowing")
+        px, py = x + 0.9 + i * 1.2, y + 6.0
+        out += clinger(f"{p}_p{i}", px, py - 0.3, 0.0, 1.5708)        # arms along the log (log runs ~east-west)
+        out += foam(f"{p}_p{i}_foam", px, py - 0.3, top, t.get("water") == "flowing")
     return out
 
 def t_S3c(p, x, y, t):   # nobody (false alarm)
@@ -410,7 +533,12 @@ def t_S5b(p, x, y, t):   # several occupied cars in a lot, occupants beside thei
     return out
 
 
+def t_S4b_v2(p, x, y, t):   # bridge awash (flowing over the deck) with N people at the railing
+    return bridge(p, x, y, t, deck=0.6, awash=t.get("water") == "flowing")
+
+
 TEMPLATES.update({
+    "S4b": t_S4b_v2,
     "S1a": t_S1a, "S1b": t_S1b, "S1c": t_S1c, "S1d": t_S1d, "S1e": t_S1e,
     "S2b": t_S2b, "S2d": t_S2d, "S2e": t_S2e,
     "S3a": t_S3a, "S3b": t_S3b, "S3c": t_S3c,
@@ -719,7 +847,11 @@ def world(set_id):
             print("Scenes moved clear of buildings (from the call pin):", ", ".join(moved))
     else:
         print("No geo/ data: flat ground (run tools/fetch_geo.py)")
-    if new_offsets:
+    json.dump({"world": name, "items": FLOW_ITEMS},
+              open(os.path.join(REPO, "worlds", f"{name}_flow.json"), "w"), indent=1)
+    if new_offsets and "TEST" in set_id.upper():
+        print(f"Test set: new offsets not recorded ({', '.join(new_offsets)})")
+    elif new_offsets:
         json.dump(offsets, open(OFFSETS_FILE, "w"), indent=2, sort_keys=True)
         print(f"Recorded new scene offsets in calls/scene_offsets.json: {', '.join(new_offsets)}")
     scenes = {c["call_id"]: {"location": c["location"], "pin_en": [round(c["pos"][1], 1), round(c["pos"][0], 1)],
