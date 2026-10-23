@@ -434,6 +434,19 @@ class UAVAutonomousNode(Node):
     #  DASHBOARD WRITER
     # =========================================================
 
+    def _egle_state(self) -> str:
+        """E1: participant-facing mode. No timer or countdown to tau.
+        RETURNING is reserved for the battery-gate return (D3, not yet built).
+        HOLD appears only in the control condition (tau = None) while the
+        operator is inactive, so it can never cue an upcoming takeover."""
+        if getattr(self, "gate_return", False):
+            return "RETURNING"
+        if self.drone_state != DroneState.MANUAL:
+            return "AUTONOMOUS"
+        if TAU_S is None and (time.time() - self.last_key_time) >= SESSION["episode_min_s"]:
+            return "HOLD"
+        return "MANUAL"
+
     def _write_dashboard_state(self):
         e  = time.time() - self.flight_start_time
         m  = int(e // 60); s = int(e % 60)
@@ -447,6 +460,7 @@ class UAVAutonomousNode(Node):
         state = {
             "flight_time": ft, "timestamp": time.time(),
             "drone_state": self.drone_state.value, "llm_running": self.llm_running,
+            "egle_state": self._egle_state(),
             "post_reentry": self.post_signal_loss_reentry,
             "dwell_active": self.dwell_active, "dwell_remaining": round(dr, 1),
             "battery_pct": round(self.battery_pct, 1),
@@ -1278,11 +1292,11 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
             self.signal_loss_count   += 1
             self.signal_loss_since_depart = True
             self.log_event(
-                f"Signal/comm loss #{self.signal_loss_count}. "
+                f"Agent takeover #{self.signal_loss_count}. "
                 f"Battery: {self.battery_pct:.1f}%. Was heading: {self.pre_loss_wp_name}"
             )
             self._print_signal_banner(
-                "LOST",
+                "AGENT TAKEOVER",
                 f"Loss #{self.signal_loss_count} | Batt: {self.battery_pct:.1f}% | Was: {self.pre_loss_wp_name}"
             )
 
@@ -1299,11 +1313,11 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
             self.signal_was_lost         = False
             self.post_signal_loss_reentry = True
             self.log_event(
-                f"Signal regained. Duration: {duration:.1f}s. "
-                f"Cost: {self.last_loss_battery_cost:.1f}%. Drift: {self.last_loss_drift:.1f}m"
+                f"Control returned to operator. Agent time: {duration:.1f}s. "
+                f"Battery cost: {self.last_loss_battery_cost:.1f}%. Drift: {self.last_loss_drift:.1f}m"
             )
             self._print_signal_banner(
-                "REGAINED",
+                "CONTROL RETURNED",
                 f"Duration: {duration:.1f}s | Cost: {self.last_loss_battery_cost:.1f}% | Drift: {self.last_loss_drift:.1f}m"
             )
             # A6 handback: operator input returns control immediately. Previously
