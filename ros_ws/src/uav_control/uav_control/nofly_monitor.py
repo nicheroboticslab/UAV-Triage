@@ -65,7 +65,12 @@ class NoFlyMonitor:
 
     def _say(self, msg, warn=False):
         if self.logger:
-            (self.logger.warn if warn else self.logger.info)(msg)
+            # rclpy raises if one source line logs at two severities, so keep
+            # the WARN and INFO calls on separate lines.
+            if warn:
+                self.logger.warn(msg)
+            else:
+                self.logger.info(msg)
         if self.log_event:
             try:
                 self.log_event(msg)
