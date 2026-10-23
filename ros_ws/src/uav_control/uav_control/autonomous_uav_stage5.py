@@ -26,6 +26,7 @@ from session_config import load_session
 from inaction_log import InactionLog
 from battery_model import BatterySystem, load_config as load_battery_config
 from px4_battery_display import PX4BatteryDisplay
+import call_sets
 from datetime import datetime
 from pynput import keyboard
 from enum import Enum
@@ -87,6 +88,13 @@ SESSION                      = load_session()
 TAU_S                        = SESSION["tau_s"]
 # D2/D3: script-driven battery (battery.json); PX4's simulated battery is logged only.
 BATT_CFG, BATT_CFG_PATH      = load_battery_config()
+# C4: if the block names a call set, its calls replace the scenario.json sectors.
+CALL_SET_ID                  = SESSION["block"].get("call_set")
+if CALL_SET_ID:
+    with open(SCENARIO_FILE) as _f:
+        _sc = _json.load(_f)
+    _cs, _calls = call_sets.resolve(CALL_SET_ID, _sc["home"], float(_sc.get("cruise_alt_m", 10.0)))
+    MAP["sectors"] = call_sets.as_sectors(_calls)
 BATTERY_LOW_THRESH           = 25.0
 BATTERY_CRIT_THRESH          = 15.0
 EKF_CONF_MIN                 = 0.4

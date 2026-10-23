@@ -1,0 +1,305 @@
+{
+  "_help": "Call-location pool (C3): 30 locations within 1.5 km of home (range widened 23 Oct). Source: call_location_pool.csv / claude/call-location-pool.md v2 (project). 'landmark' is for the researcher; 'label' is participant-facing - currently the place name; generic labels vs real names still to be decided (decisions log 2.7). call_type and ground truth are assigned per call in the set files. source 'search, confirmed' = Google Maps pin confirmed by Ben; consider re-taking from an independent source before the study freeze.",
+  "locations": [
+    {
+      "id": "L01",
+      "landmark": "Ford/Evergreen overpass",
+      "label": "Ford/Evergreen overpass",
+      "call_type": null,
+      "lat": 42.328652,
+      "lon": -83.234594,
+      "alt_m": 10,
+      "source": "user"
+    },
+    {
+      "id": "L02",
+      "landmark": "HFC Eshleman Library",
+      "label": "HFC Eshleman Library",
+      "call_type": null,
+      "lat": 42.324528,
+      "lon": -83.236246,
+      "alt_m": 10,
+      "source": "search, confirmed"
+    },
+    {
+      "id": "L03",
+      "landmark": "HFC Reuther Liberal Arts",
+      "label": "HFC Reuther Liberal Arts",
+      "call_type": null,
+      "lat": 42.324039,
+      "lon": -83.23576,
+      "alt_m": 10,
+      "source": "search, confirmed"
+    },
+    {
+      "id": "L04",
+      "landmark": "HFC pond fountain",
+      "label": "HFC pond fountain",
+      "call_type": null,
+      "lat": 42.32456,
+      "lon": -83.240098,
+      "alt_m": 10,
+      "source": "user"
+    },
+    {
+      "id": "L05",
+      "landmark": "UMD parking structure",
+      "label": "UMD parking structure",
+      "call_type": null,
+      "lat": 42.320374,
+      "lon": -83.237033,
+      "alt_m": 10,
+      "source": "user"
+    },
+    {
+      "id": "L06",
+      "landmark": "UMD IAVS",
+      "label": "UMD IAVS",
+      "call_type": null,
+      "lat": 42.319146,
+      "lon": -83.232984,
+      "alt_m": 10,
+      "source": "search, confirmed"
+    },
+    {
+      "id": "L07",
+      "landmark": "UMD EIC",
+      "label": "UMD EIC",
+      "call_type": null,
+      "lat": 42.31921,
+      "lon": -83.237898,
+      "alt_m": 10,
+      "source": "search, confirmed"
+    },
+    {
+      "id": "L08",
+      "landmark": "UMD CASL",
+      "label": "UMD CASL",
+      "call_type": null,
+      "lat": 42.316081,
+      "lon": -83.230681,
+      "alt_m": 10,
+      "source": "search, confirmed"
+    },
+    {
+      "id": "L09",
+      "landmark": "UMD Science (SLRC)",
+      "label": "UMD Science (SLRC)",
+      "call_type": null,
+      "lat": 42.318661,
+      "lon": -83.235386,
+      "alt_m": 10,
+      "source": "search, confirmed"
+    },
+    {
+      "id": "L10",
+      "landmark": "UMD Fieldhouse",
+      "label": "UMD Fieldhouse",
+      "call_type": null,
+      "lat": 42.314609,
+      "lon": -83.228588,
+      "alt_m": 10,
+      "source": "search, confirmed"
+    },
+    {
+      "id": "L11",
+      "landmark": "UMD Fairlane Center North",
+      "label": "UMD Fairlane Center North",
+      "call_type": null,
+      "lat": 42.323539,
+      "lon": -83.224011,
+      "alt_m": 10,
+      "source": "search, confirmed"
+    },
+    {
+      "id": "L12",
+      "landmark": "Fairlane Woods leasing office",
+      "label": "Fairlane Woods leasing office",
+      "call_type": null,
+      "lat": 42.326485,
+      "lon": -83.227088,
+      "alt_m": 10,
+      "source": "user"
+    },
+    {
+      "id": "L13",
+      "landmark": "Fairlane Woods apartment",
+      "label": "Fairlane Woods apartment",
+      "call_type": null,
+      "lat": 42.324132,
+      "lon": -83.22897,
+      "alt_m": 10,
+      "source": "user"
+    },
+    {
+      "id": "L14",
+      "landmark": "Hubbard/Evergreen intersection",
+      "label": "Hubbard/Evergreen intersection",
+      "call_type": null,
+      "lat": 42.321521,
+      "lon": -83.231637,
+      "alt_m": 10,
+      "source": "user"
+    },
+    {
+      "id": "L15",
+      "landmark": "HFC bus stop",
+      "label": "HFC bus stop",
+      "call_type": null,
+      "lat": 42.32489,
+      "lon": -83.234115,
+      "alt_m": 10,
+      "source": "search, confirmed"
+    },
+    {
+      "id": "L16",
+      "landmark": "Fairlane Mall food court",
+      "label": "Fairlane Mall food court",
+      "call_type": null,
+      "lat": 42.315926,
+      "lon": -83.223475,
+      "alt_m": 10,
+      "source": "user"
+    },
+    {
+      "id": "L17",
+      "landmark": "Movie theater",
+      "label": "Movie theater",
+      "call_type": null,
+      "lat": 42.317333,
+      "lon": -83.224519,
+      "alt_m": 10,
+      "source": "user"
+    },
+    {
+      "id": "L18",
+      "landmark": "Union at Dearborn main entrance",
+      "label": "Union at Dearborn main entrance",
+      "call_type": null,
+      "lat": 42.31773,
+      "lon": -83.228193,
+      "alt_m": 10,
+      "source": "user"
+    },
+    {
+      "id": "L19",
+      "landmark": "Union at Dearborn extended lot",
+      "label": "Union at Dearborn extended lot",
+      "call_type": null,
+      "lat": 42.314286,
+      "lon": -83.226423,
+      "alt_m": 10,
+      "source": "user"
+    },
+    {
+      "id": "L20",
+      "landmark": "A&W Fairlane",
+      "label": "A&W Fairlane",
+      "call_type": null,
+      "lat": 42.320586,
+      "lon": -83.224126,
+      "alt_m": 10,
+      "source": "search, confirmed"
+    },
+    {
+      "id": "L21",
+      "landmark": "WoodSpring Suites",
+      "label": "WoodSpring Suites",
+      "call_type": null,
+      "lat": 42.320859,
+      "lon": -83.223076,
+      "alt_m": 10,
+      "source": "search, confirmed"
+    },
+    {
+      "id": "L22",
+      "landmark": "Henry Ford Medical Center Fairlane",
+      "label": "Henry Ford Medical Center Fairlane",
+      "call_type": null,
+      "lat": 42.319583,
+      "lon": -83.228433,
+      "alt_m": 10,
+      "source": "search, confirmed"
+    },
+    {
+      "id": "L23",
+      "landmark": "Golf course",
+      "label": "Golf course",
+      "call_type": null,
+      "lat": 42.322618,
+      "lon": -83.245254,
+      "alt_m": 10,
+      "source": "user"
+    },
+    {
+      "id": "L24",
+      "landmark": "Rouge River bridge",
+      "label": "Rouge River bridge",
+      "call_type": null,
+      "lat": 42.32445,
+      "lon": -83.24226,
+      "alt_m": 10,
+      "source": "user"
+    },
+    {
+      "id": "L25",
+      "landmark": "Rouge River",
+      "label": "Rouge River",
+      "call_type": null,
+      "lat": 42.321297,
+      "lon": -83.244513,
+      "alt_m": 10,
+      "source": "user"
+    },
+    {
+      "id": "L26",
+      "landmark": "Rouge River fork",
+      "label": "Rouge River fork",
+      "call_type": null,
+      "lat": 42.31381,
+      "lon": -83.234585,
+      "alt_m": 10,
+      "source": "user"
+    },
+    {
+      "id": "L27",
+      "landmark": "Rouge River waterfall/powerhouse",
+      "label": "Rouge River waterfall/powerhouse",
+      "call_type": null,
+      "lat": 42.313161,
+      "lon": -83.232466,
+      "alt_m": 10,
+      "source": "user"
+    },
+    {
+      "id": "L28",
+      "landmark": "Pedestrian bridge",
+      "label": "Pedestrian bridge",
+      "call_type": null,
+      "lat": 42.310769,
+      "lon": -83.230931,
+      "alt_m": 10,
+      "source": "user"
+    },
+    {
+      "id": "L29",
+      "landmark": "First Presbyterian Church",
+      "label": "First Presbyterian Church",
+      "call_type": null,
+      "lat": 42.317616,
+      "lon": -83.242945,
+      "alt_m": 10,
+      "source": "user"
+    },
+    {
+      "id": "L30",
+      "landmark": "Fair Lane Estate",
+      "label": "Fair Lane Estate",
+      "call_type": null,
+      "lat": 42.314175,
+      "lon": -83.232357,
+      "alt_m": 10,
+      "source": "user"
+    }
+  ]
+}
