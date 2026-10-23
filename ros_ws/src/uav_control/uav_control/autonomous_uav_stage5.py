@@ -497,7 +497,8 @@ class UAVAutonomousNode(Node):
         self.target_pos       = list(ground_target)
         self.inaction.close(time.time(), self.drone_state.value, "block_ended")
         self.log_event({"emergency_return": "Emergency return home — block ended.",
-                        "battery_gate": "Battery reserve reached — returning home. Block ended."}
+                        "battery_gate": "Battery reserve reached — returning home. Block ended.",
+                        "battery_depleted": "Battery depleted — landing in place. Block ended."}
                        .get(reason, "Emergency landing — block ended."))
 
     def _battery_tick(self):
@@ -510,9 +511,14 @@ class UAVAutonomousNode(Node):
         if not self.battery_override:
             self.battery_pct = self.batt.pct
         if "warn" in events:
-            self.log_event(f"Battery low ({self.batt.pct:.0f}%). Automatic return at {self.batt.return_pct:.0f}%.")
+            self.log_event(f"Battery low ({self.batt.pct:.0f}%).")
+        if "reserve" in events:
+            self.log_event(f"Battery reserve ({self.batt.pct:.0f}%): about "
+                           f"{self.batt.pct / self.batt.reserve_per_100m * 0.1:.1f} km of flight left.")
         if "gate" in events:
             self._battery_gate()
+        if "depleted" in events:
+            self._battery_depleted()
         if getattr(self, "_batt_log_done", False):
             return
         if self.block_landed:
@@ -529,6 +535,16 @@ class UAVAutonomousNode(Node):
                     f.write(json.dumps(rec) + "\n")
             except Exception:
                 pass
+
+    def _battery_depleted(self):
+        """Battery at 0 % (Ben, 23 Oct): land in place, block ends. Becomes a crash
+        with damage once the hazard/damage model (G-series) exists."""
+        if self.block_ended:
+            return
+        self.send_cmd(21, 0.0)   # MAV_CMD_NAV_LAND at the current position
+        self.get_logger().error("[BATT] Battery depleted → LANDING IN PLACE")
+        wp = list(self.current_pos); wp[2] = 0.0
+        self._end_block("battery_depleted", wp)
 
     def _battery_gate(self):
         """D3: battery reserve reached -> PX4 return-to-launch and land; block ends.
@@ -586,7 +602,7 @@ class UAVAutonomousNode(Node):
             "dwell_active": self.dwell_active, "dwell_remaining": round(dr, 1),
             "battery_pct": round(self.battery_pct, 1),
             "battery_low": self.battery_pct <= self.batt.warn_pct,
-            "battery_crit": self.battery_pct <= self.batt.return_pct,
+            "battery_crit": self.battery_pct <= (self.batt.reserve_pct or 0.0),
             "ekf_confidence": round(self.ekf_confidence, 2),
             "ekf_ok": self.ekf_confidence >= EKF_CONF_MIN,
             "position": [round(v, 1) for v in self.current_pos],

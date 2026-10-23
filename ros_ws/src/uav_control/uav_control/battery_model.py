@@ -89,6 +89,11 @@ class Battery:
         self.drawn_wh += power_w * dt / 3600.0
         return v, current
 
+    def drain_pct(self, pct):
+        """Remove a percentage of capacity directly (reserve mode)."""
+        self.drawn_ah += self.q_ah * pct / 100.0
+        self.drawn_wh += self.energy_wh * pct / 100.0
+
     @property
     def pct(self):
         return max(0.0, 100.0 * (1.0 - self.drawn_ah / self.q_ah))
@@ -103,7 +108,15 @@ class BatterySystem:
         self.battery = Battery(cfg)
         g = cfg["gate"]
         self.warn_pct = g["warn_pct"]
-        self.return_pct = g["return_pct"]
+        self.return_pct = g.get("return_pct")              # None: no forced return (Ben, 23 Oct)
+        # Reserve (Ben, 23 Oct): below reserve_pct the battery drains by distance,
+        # reserve_pct_per_100m per 100 m flown; below reserve_slow_ms (hover, slow
+        # flight) it keeps draining at the power-model rate. 0 % -> 'depleted'.
+        self.reserve_pct = g.get("reserve_pct")
+        self.reserve_per_100m = float(g.get("reserve_pct_per_100m", 1.0))
+        self.reserve_slow_ms = float(g.get("reserve_slow_ms", 2.0))
+        self.in_reserve = False
+        self.depleted = False
         self.wind = tuple(cfg.get("wind_ned_ms", [0.0, 0.0]))
         self.warned = False
         self.gate_reached = False
@@ -115,16 +128,29 @@ class BatterySystem:
             p, V = self.power.total(vel_ned, self.wind)
         else:
             p, V = 0.0, 0.0
-        v, i = self.battery.step(p, dt)
-        self.last = {"power_w": p, "airspeed_ms": V, "voltage_v": v, "current_a": i}
+        ground = math.hypot(vel_ned[0], vel_ned[1]) if flying else 0.0
+        if self.in_reserve and flying and ground >= self.reserve_slow_ms:
+            v = self.battery.voltage(p / self.battery.v_nom)
+            i = p / max(v, 1e-3)
+            self.battery.drain_pct(self.reserve_per_100m * ground * dt / 100.0)
+        else:
+            v, i = self.battery.step(p, dt)
+        self.last = {"power_w": p, "airspeed_ms": V, "voltage_v": v, "current_a": i,
+                     "reserve": self.in_reserve}
         events = []
         pct = self.battery.pct
         if not self.warned and pct <= self.warn_pct:
             self.warned = True
             events.append("warn")
-        if not self.gate_reached and pct <= self.return_pct:
+        if self.reserve_pct is not None and not self.in_reserve and pct <= self.reserve_pct:
+            self.in_reserve = True
+            events.append("reserve")
+        if self.return_pct is not None and not self.gate_reached and pct <= self.return_pct:
             self.gate_reached = True
             events.append("gate")
+        if not self.depleted and pct <= 0.0:
+            self.depleted = True
+            events.append("depleted")
         return events
 
     @property

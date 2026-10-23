@@ -13,16 +13,20 @@
     "flat_plate_area_m2": 0.1
   },
   "battery": {
-    "usable_energy_wh": 128.3,
-    "_energy_note": "PROPOSED: scaled so the return gate falls at 13.5 min for a reference profile of 60% cruise at 14 m/s + 40% hover (456 W). Decisions log 4.1/4.7: gate ~12-15 min.",
+    "usable_energy_wh": 76.2,
+    "_energy_note": "Ben 23 Oct: sized so the optimal agent mission on a ~4 km set (14 m/s + 45 s hover per call; 64.8 Wh) ends with ~15 % left. Full drain ~10.5 min hovering. Supersedes the 128.3 Wh proposal.",
     "nominal_voltage_v": 22.2,
     "_voltage_note": "Assumed 6S x 3.7 V. With voltage_model 'constant' it only affects the logged current, not the %.",
     "voltage_model": "constant"
   },
   "gate": {
-    "warn_pct": 30.0,
-    "return_pct": 20.0,
-    "_note": "PROPOSED. At return_pct: forced PX4 return-to-launch and land; block ends (D3). Reserve check: a 1 km return at 14 m/s plus climb and landing uses ~15 Wh, below the 20% reserve."
+    "warn_pct": 15.0,
+    "reserve_pct": 15.0,
+    "reserve_pct_per_100m": 1.0,
+    "reserve_slow_ms": 2.0,
+    "return_pct": null,
+    "depleted_action": "land_in_place",
+    "_note": "Ben 23 Oct: warning at 15 %. Below 15 % the battery drains 1 % per 100 m flown (reserve = 1.5 km); hovering/slow flight (< 2 m/s) keeps draining at the model rate. No forced return. At 0 %: land in place, block ends (crash/damage once G-series exists)."
   },
   "wind_ned_ms": [
     0.0,
