@@ -50,8 +50,9 @@ POLL_HZ = 20
 EXPO = 2.0            # stick curve: >1 = finer control near centre (1 = linear)
 
 # Smooth mode: the target glides every cycle and stays on a short leash ahead of the drone
-MAX_SPEED = 8.0       # m/s horizontal at full stick
-MAX_CLIMB = 2.0       # m/s vertical at full stick
+MAX_SPEED = 23.0      # m/s horizontal at full stick (D1, = MPC_XY_VEL_MAX)
+MAX_CLIMB = 6.0       # m/s ascent at full stick (D1, = MPC_Z_VEL_MAX_UP)
+MAX_DESCENT = 5.0     # m/s descent at full stick (D1, = MPC_Z_VEL_MAX_DN)
 LEASH_XY = 8.0        # max metres the target may lead the drone horizontally
 LEASH_Z = 3.0         # max metres the target may lead the drone vertically
 MAX_YAW_RATE = 60.0   # deg/s turn rate at full stick
@@ -134,13 +135,26 @@ class ControllerInput:
         active = bool(fwd or right or up or turn)
         now = time.time()
         if not active:
+            # Brake-then-hold: after the sticks are released, keep the target on
+            # the vehicle until it has slowed, so PX4 brakes to a stop instead of
+            # overshooting the last target and flying back to it.
+            if self._burst and self._in_manual():
+                cur = list(n.current_pos)
+                prev = getattr(self, "_prev_pos", None)
+                speed = (math.hypot(cur[0] - prev[0], cur[1] - prev[1]) / dt) if prev else 99.0
+                self._prev_pos = cur
+                if speed > 0.5:
+                    n.target_pos[0], n.target_pos[1], n.target_pos[2] = cur[0], cur[1], n.target_pos[2]
+                    self._idle = 0.0
             self._idle += dt
             if self._burst and self._idle > IDLE_RESET_S:
                 self._burst = False
             if not self._burst and not self._in_manual() and hasattr(n, "manual_yaw"):
                 n.manual_yaw = None               # AI flying: it controls heading again
+            n.manual_vel = None                   # sticks centred: no velocity feed-forward
             return
         self._idle = 0.0
+        self._prev_pos = None
         if not self._burst:
             start_yaw = self._commanded_yaw()     # keep the heading the drone already has
             # One real key press through the pilot script so MANUAL takeover and
@@ -165,12 +179,17 @@ class ControllerInput:
         # Body-frame stick -> world north/east (PX4 yaw: 0 = north, + = clockwise)
         f = self._curve(fwd) * MAX_SPEED * dt
         r = self._curve(right) * MAX_SPEED * dt
+        cu = self._curve(up)
+        vz = -cu * (MAX_CLIMB if cu > 0 else MAX_DESCENT)   # NED: up = negative
         c, sn = math.cos(n.manual_yaw), math.sin(n.manual_yaw)
         cur = n.current_pos
         t = n.target_pos
         t[0] += c * f - sn * r
         t[1] += sn * f + c * r
-        t[2] -= self._curve(up) * MAX_CLIMB * dt   # NED: up = more negative
+        t[2] += vz * dt
+        # Velocity feed-forward so full stick reaches the PX4 cap; the leash
+        # below only bounds how far the position target can lead.
+        n.manual_vel = [(c * f - sn * r) / dt, (sn * f + c * r) / dt, vz]
 
         # Leash: never let the target run far ahead of the drone
         dx, dy = t[0] - cur[0], t[1] - cur[1]
