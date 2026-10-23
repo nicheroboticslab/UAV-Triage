@@ -33,6 +33,7 @@ mkdir -p "$TAB_DIR"
 SESSION_ID="$(date +%s)-$$"
 echo "$SESSION_ID" > "$TAB_DIR/session_id"
 > "$TAB_DIR/session_pids"
+rm -f /tmp/uav_start_signal   # pilot script waits for this (START)
 > "$PX4_LOG"   # truncate any stale log so old "Ready for takeoff!" lines can't cause a false match
 
 echo "Checking for leftover processes from a previous run..."
@@ -94,7 +95,7 @@ sleep 2
 eval "\$(python3 ~/UAV-Triage/scenario_tool.py --env)"   # home location from scenario.json
 cd ~/PX4-Autopilot
 # Attach to the egle_drone already in the running world instead of spawning an x500
-PX4_GZ_MODEL_NAME=egle_drone stdbuf -oL -eL make px4_sitl gz_x500 2>&1 | tee "$PX4_LOG"
+PX4_GZ_MODEL_NAME=egle_drone stdbuf -oL -eL make px4_sitl gz_x500_gimbal 2>&1 | tee "$PX4_LOG"
 exec bash
 EOF
 
@@ -183,17 +184,17 @@ if [ $? -ne 0 ]; then
 fi
 
 echo ""
-echo "=== Stage 3/3: Dashboard, then pilot script on START ==="
+echo "=== Stage 3/3: Dashboard, camera, pilot script (waits for START) ==="
 rm -f /tmp/uav_dashboard_state.json   # don't show the previous run's state while waiting
 gnome-terminal --window --title="Dashboard" -- bash "$TAB_DIR/5_dashboard.sh"
 gnome-terminal --window --title="6-Camera" -- bash "$TAB_DIR/6_camera.sh"
+gnome-terminal --window --title="4-Pilot-Script" -- bash "$TAB_DIR/4_pilot.sh"
 
 echo ""
 echo "Simulation ready. Drone is on the ground, disarmed."
 echo ""
 python3 "$REPO_DIR/start_gate.py" || { echo "Start cancelled — simulation left running."; exit 1; }
-
-gnome-terminal --window --title="4-Pilot-Script" -- bash "$TAB_DIR/4_pilot.sh"
+touch /tmp/uav_start_signal   # the waiting pilot script arms, takes off; control live once airborne
 
 echo ""
 echo "Mission started. Click into the Dashboard window before pressing any flight keys."

@@ -114,6 +114,9 @@ LOITER_OMEGA                 = 0.3    # rad/s  (~21s per orbit)
 # at MPC_XY_VEL_MAX (set_px4_params.py).
 AGENT_CRUISE_MS              = 14.0
 AGENT_ACCEL_MS2              = 2.5    # carrot speed ramp up/down (m/s^2)
+AGENT_YAW_RATE               = 45.0   # deg/s, agent turning toward its travel direction
+CONTROL_LIVE_ALT_M           = 2.0    # operator control (and tau) starts above this after take-off
+START_SIGNAL_FILE            = "/tmp/uav_start_signal"   # created by start_gate.py on START
 RETURN_REASONS               = ("emergency_return", "battery_gate")
 CONTROL_DT_S                 = 0.05   # control loop period (20 Hz)
 
@@ -388,7 +391,9 @@ class UAVAutonomousNode(Node):
                                 "timer_period_s": CONTROL_DT_S}) + "\n")
 
         # D2: QGC shows PX4's simulated battery; make it follow the model.
-        self.px4_batt_display = PX4BatteryDisplay(lambda: self.batt.pct, self.get_logger())
+        self.gimbal_cmd = [45.0, 0.0]   # camera pitch down, yaw right (deg); set by controller_input
+        self.px4_batt_display = PX4BatteryDisplay(lambda: self.batt.pct, self.get_logger(),
+                                                  get_gimbal=lambda: tuple(self.gimbal_cmd))
         self.px4_batt_display.start()
 
         # Block end (emergency land is terminal for the block)
@@ -549,7 +554,8 @@ class UAVAutonomousNode(Node):
             return "RETURNING"
         if self.drone_state != DroneState.MANUAL:
             return "AUTONOMOUS"
-        if TAU_S is None and (time.time() - self.last_key_time) >= SESSION["episode_min_s"]:
+        if (TAU_S is None and getattr(self, "control_live_time", None) is not None
+                and (time.time() - self.last_key_time) >= SESSION["episode_min_s"]):
             return "HOLD"
         return "MANUAL"
 
@@ -882,9 +888,25 @@ Consider: Is it safe to resume? Is the drift acceptable? Is this a pattern?
     #  COMM LOSS / WAYPOINT
     # =========================================================
 
+    def _control_live(self) -> bool:
+        """Operator control starts once the vehicle is armed and above
+        CONTROL_LIVE_ALT_M after START. The inaction timer (tau) and episode
+        logging start then, so the agent cannot take over during arming and
+        take-off."""
+        if getattr(self, "control_live_time", None) is not None:
+            return True
+        if self.counter >= 120 and self.pos_initialized and -self.current_pos[2] >= CONTROL_LIVE_ALT_M:
+            self.control_live_time = time.time()
+            self.last_key_time     = self.control_live_time
+            self.log_event(f"Control live (airborne {-self.current_pos[2]:.1f} m). Inaction timer started.")
+            return True
+        return False
+
     def check_operator_inactive(self) -> bool:
         # A1/A5/B3: takeover depends only on operator inaction. Battery and
         # EKF no longer trigger it. Control condition (tau = None): never.
+        if not self._control_live():
+            return False
         if TAU_S is None:
             return False
         return (time.time() - self.last_key_time) > TAU_S
@@ -1358,6 +1380,9 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
             self._carrot_v = 0.0
         dx, dy = tgt[0] - self._carrot[0], tgt[1] - self._carrot[1]
         d      = math.hypot(dx, dy)
+        if d > 3.0:
+            # Face the direction of travel (forward camera looks where the agent goes)
+            self._agent_yaw_goal = math.atan2(dy, dx)     # PX4 yaw: 0 = north, + = east
         # Transit altitude: climb before moving, cruise above buildings/trees,
         # descend vertically once over the goal (decisions: raise cruise altitude).
         transit_z = -MAP["transit_alt_m"]
@@ -1379,6 +1404,26 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
         ux, uy = dx / d, dy / d
         self._carrot = [self._carrot[0] + ux * step, self._carrot[1] + uy * step]
         return ([self._carrot[0], self._carrot[1], tgt[2]], [ux * v, uy * v, 0.0])
+
+    def _yaw_sp(self):
+        """Heading sent to PX4. MANUAL: the operator's. Loiter: circle tangent.
+        Agent: toward its travel direction, rate-limited to AGENT_YAW_RATE; held
+        on arrival. Starts from the last heading sent, so nothing snaps."""
+        last = getattr(self, "last_sp_yaw", 0.0)
+        if self.drone_state == DroneState.MANUAL and getattr(self, "manual_yaw", None) is not None:
+            return self.manual_yaw
+        if self.drone_state == DroneState.MANUAL:
+            return last
+        if self.loitering:
+            goal = self.circle_angle + math.pi / 2.0
+        else:
+            goal = getattr(self, "_agent_yaw_goal", None)
+            if goal is None:
+                return last
+        err  = math.atan2(math.sin(goal - last), math.cos(goal - last))
+        step = math.radians(AGENT_YAW_RATE) * self.timer_period
+        yaw  = goal if abs(err) <= step else last + math.copysign(step, err)
+        return math.atan2(math.sin(yaw), math.cos(yaw))
 
     def update_loiter(self):
         if not self.loitering or self.circle_center is None: return
@@ -1414,7 +1459,7 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
             sp           = TrajectorySetpoint()
             sp.timestamp = timestamp
             sp.position  = [float(v) for v in self.target_pos]
-            sp.yaw       = 0.0
+            sp.yaw       = getattr(self, "last_sp_yaw", 0.0)   # keep heading while landing
             self.traj_pub.publish(sp)
             if not self.block_landed and self.pos_initialized:
                 near_home = math.hypot(self.current_pos[0], self.current_pos[1]) < 5.0
@@ -1428,7 +1473,8 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
             return
 
         comm_loss = self.check_operator_inactive()
-        self.inaction.update(now, self.last_key_time, self.drone_state.value)
+        if self._control_live():
+            self.inaction.update(now, self.last_key_time, self.drone_state.value)
 
         # ---- Signal loss / regain detection ----
         if comm_loss and not self.signal_was_lost:
@@ -1607,10 +1653,8 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
         pos, vel     = self._setpoint_pos_vel()
         sp.position  = pos
         sp.velocity  = vel
-        sp.yaw       = (self.manual_yaw
-                        if (self.drone_state == DroneState.MANUAL
-                            and getattr(self, 'manual_yaw', None) is not None)
-                        else (self.circle_angle + math.pi / 2.0 if self.loitering else 0.0))
+        sp.yaw       = self._yaw_sp()
+        self.last_sp_yaw = sp.yaw
         self.traj_pub.publish(sp)
 
         # ---- Arm sequence ----
@@ -1664,8 +1708,30 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
 # ============================================================
 #  ENTRY POINT
 # ============================================================
+def wait_for_start():
+    """The pilot script is started before START so everything is loaded. It
+    waits here until start_gate.py (controller Start or Enter in the launcher
+    terminal) creates START_SIGNAL_FILE, or Enter is pressed in this window."""
+    import select
+    print(f"[SYS] Loaded. Waiting for START (controller Start, Enter in the launcher or here, "
+          f"or: touch {START_SIGNAL_FILE})", flush=True)
+    while not os.path.exists(START_SIGNAL_FILE):
+        try:
+            r, _, _ = select.select([sys.stdin], [], [], 0.1)
+            if r:
+                sys.stdin.readline()
+                break
+        except Exception:
+            time.sleep(0.1)
+    print("[SYS] START", flush=True)
+
+
 def main():
     rclpy.init()
+    try:
+        wait_for_start()
+    except KeyboardInterrupt:
+        os._exit(0)          # stopped before START: nothing to close
     node = UAVAutonomousNode()
     try:
         rclpy.spin(node)

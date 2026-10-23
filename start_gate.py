@@ -1,6 +1,7 @@
 """
 Start gate: waits until the pilot presses START on the controller, or Enter
-in this terminal, then exits so the launcher can start the mission.
+in this terminal, then exits; the launcher then creates /tmp/uav_start_signal,
+which the already-running pilot script is waiting for.
 
 Works without a controller (Enter only). Doesn't need window focus for the
 controller button.
@@ -43,7 +44,7 @@ if detect:
     print("Press controller buttons to see their numbers. Ctrl+C to exit.")
 else:
     who = "START on the controller, or Enter here" if pads else "Enter here"
-    print(f">>> Press {who} to START the mission (drone arms and takes off ~5 s later)")
+    print(f">>> Press {who} to START the mission (drone arms and takes off ~6 s later; control is live once airborne)")
 sys.stdout.flush()
 
 try:
