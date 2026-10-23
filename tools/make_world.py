@@ -179,25 +179,255 @@ def t_S4b(p, x, y, t):   # bridge awash with N people on it; channel flows +x, b
             out += foam(f"{p}_p{i}_foam", x, py, top, cat == "flowing", 0.0)
     return out
 
-def t_S5b(p, x, y, t):   # several cars in a lot, people beside some; depth readable on the wheels
-    out = water(f"{p}_w", x, y, 40, 24, t["water"], depth=depth_for(t))
-    for i in range(6):
-        cx, cy = x - 10 + (i % 3) * 8, y - 3 + (i // 3) * 6
-        out += include(CAR, f"{p}_car{i}", cx, cy, 0, 1.57)
-    top = water_top(t["water"], 0.0, depth_for(t))
-    for i in range(t["people"]):   # one person beside each of the first N cars
-        px, py = x - 10 + i * 8 + 1.6, y - 3
-        out += include(PERSON, f"{p}_p{i}", px, py, 0, 1.57)
-        if top is not None:
-            out += foam(f"{p}_p{i}_foam", px, py, top, t["water"] == "flowing")
-    return out
-
-TEMPLATES = {"S2a": t_S2a, "S2c": t_S2c, "S4b": t_S4b, "S5b": t_S5b}
+TEMPLATES = {"S2a": t_S2a, "S2c": t_S2c, "S4b": t_S4b}
 # Scene footprint (xmin, xmax, ymin, ymax) relative to the anchor, used to keep
 # the whole scene clear of real (OSM) buildings. Placeholder buildings excluded.
 EXTENT = {"S2a": (-17, 17, -16, 0), "S2c": (-16, 24, -16, 0),
           "S4b": (-30, 30, -18, 18), "S5b": (-20, 20, -12, 12)}
 PLACE_MAX_M = 120.0
+
+
+# ---------------------------------------------------------------------------
+# Outcome templates for the study sets (C5; claude/call-scenario-assignments.md).
+# Condition -> pose: mobile = standing, immobile but responsive = sitting,
+# unresponsive = lying flat, in the water = chest/neck-deep (foam at the neck).
+# Cars are one simple model with glass cabins so occupants are visible and all
+# cars in a lot look identical (S5a: find the occupied one).
+# ---------------------------------------------------------------------------
+CAR_COLOURS = ["0.62 0.62 0.64 1", "0.20 0.22 0.26 1", "0.55 0.12 0.10 1", "0.82 0.82 0.80 1",
+               "0.16 0.24 0.38 1", "0.35 0.36 0.34 1"]
+GLASS_RGBA = "0.55 0.62 0.68 1"
+GLASS_TRANSPARENCY = 0.6
+
+
+def include_rpy(uri, name, x, y, z, roll=0.0, pitch=0.0, yaw=0.0):
+    return (f'    <include><uri>{uri}</uri><name>{name}</name>'
+            f'<pose>{x:.2f} {y:.2f} {z:.2f} {roll:.4f} {pitch:.4f} {yaw:.3f}</pose><static>true</static></include>\n')
+
+
+def person(name, x, y, z=0.0, pose="standing", yaw=1.57, top=None, flowing=False):
+    """One person; pose: standing | sitting | lying. Foam ring if standing in water (top > z)."""
+    if pose == "sitting":
+        out = include(PERSON_SIT, name, x, y, z, yaw)
+    elif pose == "lying":
+        out = include_rpy(PERSON, name, x, y, z + 0.15, pitch=-1.5708, yaw=yaw)
+    else:
+        out = include(PERSON, name, x, y, z, yaw)
+    if top is not None and top > z and pose == "standing":
+        out += foam(f"{name}_foam", x, y, top, flowing)
+    return out
+
+
+def poses(n, worst):
+    """Pose per person from the worst condition: one person has it, the rest stand
+    (S6b 'some injured': half sit)."""
+    if n <= 0:
+        return []
+    if worst == "unresponsive":
+        return ["lying"] + ["standing"] * (n - 1)
+    if worst == "immobile_responsive":
+        k = max(1, n // 2)
+        return ["sitting"] * k + ["standing"] * (n - k)
+    return ["standing"] * n
+
+
+def group(p, x, y, t, z=0.0, spacing=1.3, base=0.0, worst=None):
+    cat = t.get("water")
+    top = water_top(cat, base, depth_for(t))
+    ps = poses(t["people"], worst or t.get("_worst", "mobile"))
+    out = ""
+    for i, ps_i in enumerate(ps):
+        out += person(f"{p}_p{i}", x + (i - (len(ps) - 1) / 2) * spacing, y, z, ps_i, top=top,
+                      flowing=cat == "flowing")
+    return out
+
+
+def car(name, x, y, yaw=0.0, colour=0, occupants=0, top=None):
+    """Simple car: body, wheels, glass cabin; occupants sit inside, visible through the glass."""
+    c, s = math.cos(yaw), math.sin(yaw)
+    def at(dx, dy):
+        return x + c * dx - s * dy, y + s * dx + c * dy
+    col = CAR_COLOURS[colour % len(CAR_COLOURS)]
+    out = box(f"{name}_body", x, y, 0.55, 4.2, 1.8, 0.7, col, yaw=yaw)
+    for k, (dx, dy) in enumerate(((1.35, 0.8), (1.35, -0.8), (-1.35, 0.8), (-1.35, -0.8))):
+        wx, wy = at(dx, dy)
+        out += (f'    <model name="{name}_wh{k}"><static>true</static><pose>{wx:.2f} {wy:.2f} 0.32 1.5708 0 {yaw:.3f}</pose>'
+                f'<link name="l"><visual name="v"><geometry><cylinder><radius>0.32</radius><length>0.22</length></cylinder></geometry>'
+                f'<material><ambient>0.08 0.08 0.08 1</ambient><diffuse>0.08 0.08 0.08 1</diffuse></material></visual></link></model>\n')
+    gx, gy = at(-0.2, 0.0)
+    out += (f'    <model name="{name}_glass"><static>true</static><pose>{gx:.2f} {gy:.2f} 1.18 0 0 {yaw:.3f}</pose>'
+            f'<link name="l"><visual name="v"><transparency>{GLASS_TRANSPARENCY}</transparency>'
+            f'<geometry><box><size>2.2 1.6 0.56</size></box></geometry>'
+            f'<material><ambient>{GLASS_RGBA}</ambient><diffuse>{GLASS_RGBA}</diffuse></material></visual></link></model>\n')
+    for i in range(occupants):
+        sx, sy = at(0.25 - 0.9 * (i // 2), 0.4 if i % 2 == 0 else -0.4)
+        out += include(PERSON_SIT, f"{name}_occ{i}", sx, sy, 0.45, yaw + 3.1416)
+    return out
+
+
+def lot(p, x, y, t, occupied_idx=None, occupants=0):
+    out = ""
+    for i in range(6):
+        cx, cy = x - 10 + (i % 3) * 8, y - 3 + (i // 3) * 6
+        out += car(f"{p}_car{i}", cx, cy, 1.5708, colour=i, occupants=occupants if i == occupied_idx else 0)
+    return out
+
+
+def shelter(p, x, y):
+    """Bus-stop / pickup shelter: four posts, a roof, a bench."""
+    out = box(f"{p}_roof", x, y, 2.5, 4.0, 2.0, 0.1, "0.30 0.32 0.34 1")
+    for k, (dx, dy) in enumerate(((1.9, 0.9), (1.9, -0.9), (-1.9, 0.9), (-1.9, -0.9))):
+        out += box(f"{p}_post{k}", x + dx, y + dy, 1.25, 0.1, 0.1, 2.5, "0.30 0.32 0.34 1", collide=False)
+    out += box(f"{p}_bench", x, y + 0.6, 0.45, 3.0, 0.5, 0.1, "0.45 0.35 0.25 1")
+    return out
+
+
+def roof_building(p, x, y):
+    return box(f"{p}_bldg", x, y + 7, 4, 20, 14, 8, "0.55 0.52 0.48 1")
+
+
+def bank_and_channel(p, x, y, t, depth=None):
+    """Water body along x (north of the anchor) with a dry raised bank south of it."""
+    cat = t.get("water")
+    d = depth_for(t) if depth is None else depth
+    top = water_top(cat, 0.0, d) or FLOOD_BASE_M
+    out = water(f"{p}_w", x, y + 7, 44, 14, cat, depth=d)
+    out += box(f"{p}_bank", x, y - 4, (top + 0.25) / 2, 44, 8, top + 0.25, "0.36 0.38 0.27 1")
+    return out, top + 0.25
+
+
+def bridge(p, x, y, t, deck, awash):
+    """Bridge along y over a channel flowing +x; deck at 'deck' m; awash = water over the deck."""
+    cat = t.get("water")
+    base = deck if awash else 0.0
+    dep = depth_for(t)
+    length, width = 28.0, 3.0
+    rail = "0.75 0.75 0.72 1"
+    out = box(f"{p}_bridge", x, y, deck / 2, width, length, deck, "0.45 0.40 0.35 1")
+    for side in (-1, 1):
+        rx = x + side * (width / 2 - 0.05)
+        out += box(f"{p}_rail{side + 1}", rx, y, deck + 1.1, 0.08, length, 0.08, rail, collide=False)
+        for k in range(int(length // 2) + 1):
+            out += box(f"{p}_post{side + 1}_{k}", rx, y - length / 2 + 2 * k, deck + 0.55, 0.1, 0.1, 1.1, rail, collide=False)
+    for end in (-1, 1):
+        out += box(f"{p}_bank{end + 1}", x, y + end * (length / 2 + 1), max(deck, 1.2) / 2, 12, 6, max(deck, 1.2), "0.42 0.40 0.34 1")
+    out += water(f"{p}_w", x, y, 60, length - 6, cat, base=base, depth=dep)
+    top = water_top(cat, base, dep)
+    if cat == "flowing" and awash:
+        out += box(f"{p}_pile", x - width / 2 - 0.4, y, top + 0.01, 0.8, length - 6, 0.02, FOAM_RGBA, collide=False)
+    ps = poses(t["people"], t.get("_worst", "mobile"))
+    for i, ps_i in enumerate(ps):
+        out += person(f"{p}_p{i}", x, y + (i - (len(ps) - 1) / 2) * 2.0, deck, ps_i, yaw=0.0,
+                      top=top if awash else None, flowing=cat == "flowing")
+    return out
+
+
+def _w(p, x, y, t, sx=40, sy=24, base=0.0):
+    return water(f"{p}_w", x, y, sx, sy, t.get("water"), base=base, depth=depth_for(t))
+
+
+def _top(t):
+    return water_top(t.get("water"), 0.0, depth_for(t))
+
+
+# S1 vehicle in floodwater
+def t_S1a(p, x, y, t):   # N people inside the car
+    return _w(p, x, y, t) + car(f"{p}_car", x, y, 0.4, colour=2, occupants=t["people"])
+
+def t_S1b(p, x, y, t):   # N people on the car roof
+    return _w(p, x, y, t) + car(f"{p}_car", x, y, 0.4, colour=4) + group(p, x - 0.2, y, t, z=1.46, spacing=0.7)
+
+def t_S1c(p, x, y, t):   # car found, empty
+    return _w(p, x, y, t) + car(f"{p}_car", x, y, 0.4, colour=0)
+
+def t_S1d(p, x, y, t):   # car not at the reported spot: found ~35 m east with N inside
+    return _w(p, x + 17, y, t, sx=70) + car(f"{p}_car", x + 35, y + 2, -0.3, colour=3, occupants=t["people"])
+
+def t_S1e(p, x, y, t):   # no vehicle (false alarm)
+    return _w(p, x, y, t)
+
+# S2 people trapped in a building (S2a, S2c above)
+def t_S2b(p, x, y, t):   # N people on the roof (placeholder building, roof at 8 m)
+    return roof_building(p, x, y) + _w(p, x, y - 1, t, sx=40, sy=34) + group(p, x, y + 5, t, z=8.0)
+
+def t_S2d(p, x, y, t):   # N at the entrance, one lying still
+    return _w(p, x, y - 8, t, sx=34, sy=16) + group(p, x, y - 1.5, t, worst="unresponsive")
+
+def t_S2e(p, x, y, t):   # nobody found
+    return _w(p, x, y - 8, t, sx=34, sy=16)
+
+# S3 person near water
+def t_S3a(p, x, y, t):   # N at the water's edge (on the bank)
+    out, bank_top = bank_and_channel(p, x, y, t)
+    return out + group(p, x, y - 1.5, t, z=bank_top)
+
+def t_S3b(p, x, y, t):   # person in the water holding an object (chest/neck-deep, flowing)
+    d = WATER_LEVEL_M["neck"] if t.get("depth") is None else depth_for(t)
+    out, _ = bank_and_channel(p, x, y, t, depth=d)
+    top = water_top(t.get("water"), 0.0, d)
+    out += (f'    <model name="{p}_log"><static>true</static><pose>{x + 0.9:.2f} {y + 6:.2f} {top:.3f} 0 1.5708 0.3</pose>'
+            f'<link name="l"><visual name="v"><geometry><cylinder><radius>0.22</radius><length>3.0</length></cylinder></geometry>'
+            f'<material><ambient>0.30 0.22 0.14 1</ambient><diffuse>0.30 0.22 0.14 1</diffuse></material></visual></link></model>\n')
+    for i in range(t["people"]):
+        out += person(f"{p}_p{i}", x + 0.3 + i * 1.2, y + 6, 0.0, "standing", yaw=0.0, top=top,
+                      flowing=t.get("water") == "flowing")
+    return out
+
+def t_S3c(p, x, y, t):   # nobody (false alarm)
+    return bank_and_channel(p, x, y, t)[0]
+
+# S4 bridge or structure (S4b above)
+def t_S4a(p, x, y, t):   # N people on the bridge, deck above the water
+    return bridge(p, x, y, t, deck=1.6, awash=False)
+
+def t_S4c(p, x, y, t):   # bridge clear
+    return bridge(p, x, y, t, deck=1.6, awash=False)
+
+# S5 occupied car in a full lot (S5b above)
+def t_S5a(p, x, y, t):   # one occupied car among empty ones
+    return _w(p, x, y, t) + lot(p, x, y, t, occupied_idx=4, occupants=max(1, t["people"]))
+
+def t_S5c(p, x, y, t):   # all cars empty
+    return _w(p, x, y, t) + lot(p, x, y, t)
+
+# S6 stranded group at a pickup point
+def t_S6a(p, x, y, t):   # N people standing
+    return _w(p, x, y, t, sx=30, sy=20) + shelter(p, x, y + 3) + group(p, x, y, t)
+
+def t_S6b(p, x, y, t):   # N people, some injured (half sitting)
+    return _w(p, x, y, t, sx=30, sy=20) + shelter(p, x, y + 3) + group(p, x, y, t)
+
+def t_S6c(p, x, y, t):   # nobody (false alarm)
+    return _w(p, x, y, t, sx=30, sy=20) + shelter(p, x, y + 3)
+
+
+def t_S5b(p, x, y, t):   # several occupied cars in a lot, occupants beside their cars (replaces the Hatchback version)
+    out = _w(p, x, y, t) + lot(p, x, y, t)
+    top = _top(t)
+    for i in range(t["people"]):
+        out += person(f"{p}_p{i}", x - 10 + i * 8 + 1.6, y - 3, 0.0, "standing", top=top,
+                      flowing=t.get("water") == "flowing")
+    return out
+
+
+TEMPLATES.update({
+    "S1a": t_S1a, "S1b": t_S1b, "S1c": t_S1c, "S1d": t_S1d, "S1e": t_S1e,
+    "S2b": t_S2b, "S2d": t_S2d, "S2e": t_S2e,
+    "S3a": t_S3a, "S3b": t_S3b, "S3c": t_S3c,
+    "S4a": t_S4a, "S4c": t_S4c,
+    "S5a": t_S5a, "S5b": t_S5b, "S5c": t_S5c,
+    "S6a": t_S6a, "S6b": t_S6b, "S6c": t_S6c,
+})
+EXTENT.update({
+    "S1a": (-20, 20, -12, 12), "S1b": (-20, 20, -12, 12), "S1c": (-20, 20, -12, 12),
+    "S1d": (-18, 52, -12, 12), "S1e": (-20, 20, -12, 12),
+    "S2b": (-20, 20, -18, 16), "S2d": (-17, 17, -16, 0), "S2e": (-17, 17, -16, 0),
+    "S3a": (-22, 22, -8, 14), "S3b": (-22, 22, -8, 14), "S3c": (-22, 22, -8, 14),
+    "S4a": (-30, 30, -18, 18), "S4c": (-30, 30, -18, 18),
+    "S5a": (-20, 20, -12, 12), "S5c": (-20, 20, -12, 12),
+    "S6a": (-15, 15, -10, 10), "S6b": (-15, 15, -10, 10), "S6c": (-15, 15, -10, 10),
+})
+
 # Recorded scene offsets (committed): "<location>/<scenario_code>" -> offset of
 # the scene from the call pin, metres east/north. Recorded entries are always
 # reused, so every build and every participant gets the same scene position.
@@ -435,7 +665,9 @@ def world(set_id):
             missing.append(f'{c["call_id"]}:{code}')
             continue
         body += f'    <!-- {c["call_id"]} {c["location"]} {c["label"]}: {code} -->\n'
-        body += tmpl(c["call_id"].lower(), e, n, by_id[c["call_id"]].get("truth", {}))
+        tr = dict(by_id[c["call_id"]].get("truth", {}))
+        tr["_worst"] = (by_id[c["call_id"]].get("condition") or {}).get("worst", "mobile")
+        body += tmpl(c["call_id"].lower(), e, n, tr)
     name = f"egle_{set_id}"
     sdf = f'''<?xml version="1.0"?>
 <!-- Generated by tools/make_world.py from calls/sets/{set_id}.json. Do not edit by hand. -->
