@@ -20,6 +20,8 @@ import math
 import threading
 import os
 from nofly_monitor import NoFlyMonitor
+from session_config import load_session
+from inaction_log import InactionLog
 from datetime import datetime
 from pynput import keyboard
 from enum import Enum
@@ -75,11 +77,13 @@ MAP = _load_scenario(SCENARIO_FILE)
 # ============================================================
 #  THRESHOLDS & TIMINGS
 # ============================================================
-KEYBOARD_TIMEOUT             = 15.0
+# Takeover delay (tau) comes from session.json, not from this file (A1/A3).
+# tau_s = null in session.json is the control condition: no takeover (A4).
+SESSION                      = load_session()
+TAU_S                        = SESSION["tau_s"]
 BATTERY_LOW_THRESH           = 25.0
 BATTERY_CRIT_THRESH          = 15.0
 EKF_CONF_MIN                 = 0.4
-COMMLOSS_SCORE_THRESH        = 1
 WAYPOINT_REACH_DIST          = 3.0
 DWELL_TIME                   = 20.0
 INTENT_REQUERY_INTERVAL      = 30.0
@@ -150,6 +154,7 @@ class DatasetCollector:
                 "battery_low_thresh":       BATTERY_LOW_THRESH,
                 "battery_crit_thresh":      BATTERY_CRIT_THRESH,
                 "ekf_conf_min":             EKF_CONF_MIN,
+                "tau_s":                    TAU_S,
             },
             "llm_output": {
                 "intent":                kw.get("intent", Intent.HOLD_SAFE).value,
@@ -339,6 +344,14 @@ class UAVAutonomousNode(Node):
         self.current_record_id        = None
         self.waypoint_depart_time     = 0.0
         self.signal_loss_since_depart = False
+
+        # Inaction episodes (A7). tau is logged to file only, never to the
+        # dashboard or event log, so it stays hidden from the participant (A3).
+        self.inaction = InactionLog(DATASET_DIR, SESSION, self.flight_start_time)
+        self.get_logger().info(
+            f"[SESSION] {SESSION['path']} sha256={SESSION['sha256'][:12]} -> {self.inaction.filepath}")
+        for w in SESSION["warnings"]:
+            self.get_logger().warn(f"[SESSION] {w}")
 
         # Loop
         self.counter      = 0
@@ -744,12 +757,12 @@ Consider: Is it safe to resume? Is the drift acceptable? Is this a pattern?
     #  COMM LOSS / WAYPOINT
     # =========================================================
 
-    def check_comm_loss(self) -> bool:
-        score = 0
-        if (time.time() - self.last_key_time) > KEYBOARD_TIMEOUT: score += 1
-        if self.battery_pct < BATTERY_LOW_THRESH:                  score += 1
-        if self.ekf_confidence < EKF_CONF_MIN:                     score += 1
-        return score >= COMMLOSS_SCORE_THRESH
+    def check_operator_inactive(self) -> bool:
+        # A1/A5/B3: takeover depends only on operator inaction. Battery and
+        # EKF no longer trigger it. Control condition (tau = None): never.
+        if TAU_S is None:
+            return False
+        return (time.time() - self.last_key_time) > TAU_S
 
     def check_waypoint_reached(self) -> bool:
         if not self.pos_initialized: return False
@@ -1182,10 +1195,12 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
         offboard.position  = True
         self.offboard_pub.publish(offboard)
 
-        comm_loss = self.check_comm_loss()
+        comm_loss = self.check_operator_inactive()
+        self.inaction.update(now, self.last_key_time, self.drone_state.value)
 
         # ---- Signal loss / regain detection ----
         if comm_loss and not self.signal_was_lost:
+            self.inaction.mark_takeover(now)
             self.signal_was_lost      = True
             self.signal_lost_time     = now
             self.signal_lost_battery  = self.battery_pct
@@ -1225,8 +1240,17 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
                 "REGAINED",
                 f"Duration: {duration:.1f}s | Cost: {self.last_loss_battery_cost:.1f}% | Drift: {self.last_loss_drift:.1f}m"
             )
-            self.last_llm_time = 0.0
-            self.drone_state   = DroneState.AUTO_INIT
+            # A6 handback: operator input returns control immediately. Previously
+            # this set AUTO_INIT, which left the state non-MANUAL while the
+            # operator flew with the gamepad (only a burst's first sample calls
+            # on_key_press), so manual yaw was ignored and logs showed AUTO_INIT.
+            # post_signal_loss_reentry stays True so the next takeover prompt
+            # still includes this episode (EGLe-I mission memory).
+            self.last_llm_time  = 0.0
+            self.drone_state    = DroneState.MANUAL
+            self.loitering      = False
+            self.current_intent = None
+            self.dwell_active   = False
 
         # ---- State machine ----
         if not comm_loss:
@@ -1239,12 +1263,13 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
             if self.drone_state == DroneState.MANUAL:
                 self.drone_state   = DroneState.AUTO_INIT
                 self.last_llm_time = 0.0
-                elapsed_no_input   = now - self.last_key_time
+                # No idle duration in these messages: the event log is shown on
+                # the dashboard and would reveal tau (A3).
                 self.log_event(
-                    f"Switched to AUTONOMOUS. No input: {elapsed_no_input:.0f}s. "
+                    f"Switched to AUTONOMOUS (operator inactive). "
                     f"Battery: {self.battery_pct:.1f}%. EKF: {self.ekf_confidence:.2f}"
                 )
-                self._print_mode_change("AUTONOMOUS", f"No input for {elapsed_no_input:.0f}s")
+                self._print_mode_change("AUTONOMOUS", "Operator inactive")
 
             if self.drone_state == DroneState.AUTO_INIT:
                 if not self.llm_running:
@@ -1414,6 +1439,7 @@ def main():
             f"Fallbacks={ds['fallback_count']} File={ds['filepath']}"
         )
     finally:
+        node.inaction.close(time.time(), node.drone_state.value, "shutdown")
         node.destroy_node()
         rclpy.shutdown()
 
