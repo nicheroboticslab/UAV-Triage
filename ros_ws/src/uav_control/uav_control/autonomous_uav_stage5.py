@@ -19,6 +19,7 @@ import json
 import math
 import threading
 import os
+import sys
 import hashlib
 import inspect
 from nofly_monitor import NoFlyMonitor
@@ -1677,8 +1678,19 @@ def main():
         )
     finally:
         node.inaction.close(time.time(), node.drone_state.value, "shutdown")
-        node.destroy_node()
-        rclpy.shutdown()
+        try:
+            node.destroy_node()
+            if rclpy.ok():
+                rclpy.shutdown()
+        except Exception as e:
+            print(f"[SYS] shutdown: {e}")
+        # Every log is written with open/append/close, so nothing is pending here.
+        # Exit without running C++ destructors: background threads (gamepad,
+        # keyboard listener, QGC battery sync) are still alive and tearing the
+        # ROS context down under them aborted the process (SIGABRT, 23 Oct).
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)
 
 
 if __name__ == '__main__':
