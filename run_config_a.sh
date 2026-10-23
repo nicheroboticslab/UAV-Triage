@@ -10,22 +10,38 @@
 # Usage:
 #   chmod +x run_config_a.sh
 #   ./run_config_a.sh
+#
+# World: tools/start_world.sh <call_set from session.json>; PX4 binds to egle_drone.
 
 REPO_DIR="$HOME/UAV-Triage"
 LOG_DIR="$REPO_DIR/logs"
 TAB_DIR="$LOG_DIR/tab_scripts"
 PX4_LOG="$LOG_DIR/px4_session.log"
 
+# Gazebo world = the call set named in session.json (UAV_SESSION overrides the path).
+SESSION_FILE="${UAV_SESSION:-$REPO_DIR/session.json}"
+WORLD_SET=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['block'].get('call_set') or '')" "$SESSION_FILE")
+if [ -z "$WORLD_SET" ]; then
+    echo "WARNING: session.json has no call_set; using the BASELINE world (agent still uses scenario.json sectors)."
+    WORLD_SET="BASELINE"
+fi
+echo "Session: $SESSION_FILE | world / call set: $WORLD_SET"
+
 mkdir -p "$TAB_DIR"
+# Session id + window PIDs, used by tools/stop_session.sh (dashboard Q Q) to close
+# only the windows this launcher opened.
+SESSION_ID="$(date +%s)-$$"
+echo "$SESSION_ID" > "$TAB_DIR/session_id"
+> "$TAB_DIR/session_pids"
 > "$PX4_LOG"   # truncate any stale log so old "Ready for takeoff!" lines can't cause a false match
 
 echo "Checking for leftover processes from a previous run..."
-if pgrep -f "px4|MicroXRCEAgent|QGroundControl|autonomous_uav|gz sim" > /dev/null; then
+if pgrep -f "px4|MicroXRCEAgent|QGroundControl|autonomous_uav|gz sim|camera_view" > /dev/null; then
     echo "WARNING: found existing related processes still running:"
-    ps aux | grep -E "px4|MicroXRCEAgent|QGroundControl|autonomous_uav|gz sim" | grep -v grep
+    ps aux | grep -E "px4|MicroXRCEAgent|QGroundControl|autonomous_uav|gz sim|camera_view" | grep -v grep
     read -p "Kill them and continue? (y/N) " confirm
     if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
-        pkill -9 -f "px4|MicroXRCEAgent|QGroundControl|autonomous_uav|gz sim"
+        pkill -9 -f "px4|MicroXRCEAgent|QGroundControl|autonomous_uav|gz sim|camera_view"
         sleep 2
     else
         echo "Aborted. Resolve manually, then rerun."
@@ -57,29 +73,41 @@ wait_for_log() {
 
 # --- Write each stage's command to its own script file ---
 
+cat > "$TAB_DIR/0_gazebo_world.sh" << EOF
+#!/bin/bash
+export UAV_TAB_SESSION="$SESSION_ID"; echo \$\$ >> "$TAB_DIR/session_pids"
+"$REPO_DIR/tools/start_world.sh" "$WORLD_SET"
+exec bash
+EOF
+
 cat > "$TAB_DIR/1_dds_bridge.sh" << EOF
 #!/bin/bash
+export UAV_TAB_SESSION="$SESSION_ID"; echo \$\$ >> "$TAB_DIR/session_pids"
 MicroXRCEAgent udp4 -p 8888
 exec bash
 EOF
 
 cat > "$TAB_DIR/2_px4_gazebo.sh" << EOF
 #!/bin/bash
+export UAV_TAB_SESSION="$SESSION_ID"; echo \$\$ >> "$TAB_DIR/session_pids"
 sleep 2
 eval "\$(python3 ~/UAV-Triage/scenario_tool.py --env)"   # home location from scenario.json
 cd ~/PX4-Autopilot
-stdbuf -oL -eL make px4_sitl gz_x500 2>&1 | tee "$PX4_LOG"
+# Attach to the egle_drone already in the running world instead of spawning an x500
+PX4_GZ_MODEL_NAME=egle_drone stdbuf -oL -eL make px4_sitl gz_x500 2>&1 | tee "$PX4_LOG"
 exec bash
 EOF
 
 cat > "$TAB_DIR/3_qgc.sh" << EOF
 #!/bin/bash
+export UAV_TAB_SESSION="$SESSION_ID"; echo \$\$ >> "$TAB_DIR/session_pids"
 "$REPO_DIR/QGroundControl.AppImage"
 exec bash
 EOF
 
 cat > "$TAB_DIR/4_pilot.sh" << EOF
 #!/bin/bash
+export UAV_TAB_SESSION="$SESSION_ID"; echo \$\$ >> "$TAB_DIR/session_pids"
 source /opt/ros/humble/setup.bash
 source ~/UAV-Triage/ros_ws/install/local_setup.bash
 cd ~/UAV-Triage/ros_ws
@@ -89,10 +117,18 @@ EOF
 
 cat > "$TAB_DIR/5_dashboard.sh" << EOF
 #!/bin/bash
+export UAV_TAB_SESSION="$SESSION_ID"; echo \$\$ >> "$TAB_DIR/session_pids"
 echo -en "\033]0;Dashboard\a"
 source /opt/ros/humble/setup.bash
 source ~/UAV-Triage/ros_ws/install/local_setup.bash
 python3 ~/UAV-Triage/ros_ws/src/uav_control/uav_control/uav_dashboard.py
+exec bash
+EOF
+
+cat > "$TAB_DIR/6_camera.sh" << EOF
+#!/bin/bash
+export UAV_TAB_SESSION="$SESSION_ID"; echo \$\$ >> "$TAB_DIR/session_pids"
+python3 "$REPO_DIR/ros_ws/src/uav_control/uav_control/camera_view.py"
 exec bash
 EOF
 
@@ -101,7 +137,21 @@ chmod +x "$TAB_DIR"/*.sh
 # --- Launch, one window per stage, gated by real readiness checks ---
 
 echo ""
-echo "=== Stage 1/3: DDS bridge + PX4/Gazebo (2 windows) ==="
+echo "=== Stage 0/3: Gazebo world ($WORLD_SET) ==="
+gnome-terminal --window --title="0-Gazebo-World" -- bash "$TAB_DIR/0_gazebo_world.sh"
+echo -n "Waiting for egle_drone in Gazebo "
+waited=0
+until gz topic -l 2>/dev/null | grep -q "egle_drone"; do
+    sleep 1; waited=$((waited + 1)); echo -n "."
+    if [ "$waited" -ge 300 ]; then
+        echo ""; echo "TIMEOUT after 300s waiting for the Gazebo world. Check the 0-Gazebo-World window."
+        exit 1
+    fi
+done
+echo " confirmed (${waited}s)"
+
+echo ""
+echo "=== Stage 1/3: DDS bridge + PX4 (2 windows) ==="
 gnome-terminal --window --title="1-DDS-Bridge" -- bash "$TAB_DIR/1_dds_bridge.sh"
 gnome-terminal --window --title="2-PX4-Gazebo" -- bash "$TAB_DIR/2_px4_gazebo.sh"
 
@@ -136,6 +186,7 @@ echo ""
 echo "=== Stage 3/3: Dashboard, then pilot script on START ==="
 rm -f /tmp/uav_dashboard_state.json   # don't show the previous run's state while waiting
 gnome-terminal --window --title="Dashboard" -- bash "$TAB_DIR/5_dashboard.sh"
+gnome-terminal --window --title="6-Camera" -- bash "$TAB_DIR/6_camera.sh"
 
 echo ""
 echo "Simulation ready. Drone is on the ground, disarmed."

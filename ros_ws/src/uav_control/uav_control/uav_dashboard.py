@@ -9,7 +9,9 @@ Usage:
     python3 uav_dashboard.py
 
 Reads /tmp/uav_dashboard_state.json written by the ROS node every 0.5s.
-Press Q to quit the dashboard (does NOT stop the drone).
+Press Q twice to stop the whole session (tools/stop_session.sh: pilot
+script, PX4, Gazebo, DDS agent, QGC, camera, and the launcher's windows).
+Any other key after Q cancels.
 
 What it shows:
   - EGLe mode (MANUAL / AUTONOMOUS / RETURNING / HOLD / LANDED), flight time,
@@ -24,10 +26,13 @@ import curses
 import json
 import time
 import os
+import subprocess
 import sys
 
 DASHBOARD_STATE_FILE = "/tmp/uav_dashboard_state.json"
 REFRESH_RATE         = 0.5   # seconds between screen refreshes
+STOP_SCRIPT          = os.path.expanduser("~/UAV-Triage/tools/stop_session.sh")
+STOP_LOG             = os.path.expanduser("~/UAV-Triage/logs/stop_session.log")
 
 
 def battery_bar(pct: float, width: int = 10) -> str:
@@ -243,7 +248,7 @@ def draw_dashboard(stdscr, state: dict):
         put(row, 0, "╚" + "═" * (W - 2) + "╝", 5); row += 1
     if row < max_y - 1:
         age = time.time() - state.get("timestamp", time.time())
-        footer = f" Press Q to quit  |  Last update: {age:.1f}s ago  |  Dashboard v4 "
+        footer = f" Q Q = stop session  |  Last update: {age:.1f}s ago  |  Dashboard v4 "
         put(row, 0, footer.center(W), 5)
 
     stdscr.refresh()
@@ -256,6 +261,27 @@ def load_state() -> dict:
             return json.load(f)
     except Exception:
         return {}
+
+
+def confirm_stop(stdscr):
+    """Ask for a second Q; any other key (or 5 s) cancels. Not Y: the pilot script
+    still binds y as a debug key (forces battery 10 %)."""
+    stdscr.erase()
+    stdscr.addstr(0, 0, "Stop the whole session? Closes PX4, Gazebo, QGC, camera, pilot script")
+    stdscr.addstr(1, 0, "and all launcher windows.   Q again = stop   any other key = cancel")
+    stdscr.refresh()
+    stdscr.timeout(5000)
+    ch = stdscr.getch()
+    stdscr.timeout(int(REFRESH_RATE * 1000))
+    return ch in (ord('q'), ord('Q'))
+
+
+def stop_session():
+    """Run the stop script detached, so it survives this window being closed."""
+    os.makedirs(os.path.dirname(STOP_LOG), exist_ok=True)
+    with open(STOP_LOG, "a") as log:
+        subprocess.Popen(["bash", STOP_SCRIPT], stdout=log, stderr=subprocess.STDOUT,
+                         stdin=subprocess.DEVNULL, start_new_session=True)
 
 
 def main_loop(stdscr):
@@ -280,7 +306,10 @@ def main_loop(stdscr):
         try:
             ch = stdscr.getch()
             if ch in (ord('q'), ord('Q')):
-                break
+                if confirm_stop(stdscr):
+                    stop_session()
+                    return
+                continue
         except Exception:
             pass
 
@@ -294,7 +323,7 @@ def main_loop(stdscr):
             stdscr.addstr(0, 0, "Waiting for UAV system to start...")
             stdscr.addstr(1, 0, f"Looking for: {DASHBOARD_STATE_FILE}")
             stdscr.addstr(2, 0, "Make sure autonomous_uav_stage5.py is running.")
-            stdscr.addstr(4, 0, "Press Q to quit.")
+            stdscr.addstr(4, 0, "Press Q twice to stop the session.")
             stdscr.refresh()
             time.sleep(REFRESH_RATE)
             continue
@@ -313,7 +342,7 @@ def main_loop(stdscr):
 
 def main():
     print(f"UAV Dashboard — looking for state file: {DASHBOARD_STATE_FILE}")
-    print("Starting in 1 second... Press Q inside dashboard to quit.\n")
+    print("Starting in 1 second... Q twice inside the dashboard stops the whole session.\n")
     time.sleep(1.0)
 
     try:
@@ -321,7 +350,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        print("\nDashboard closed. Drone continues flying.")
+        print("\nDashboard closed.")
 
 
 if __name__ == '__main__':
