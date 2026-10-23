@@ -9,7 +9,8 @@
 #
 # Usage:
 #   chmod +x run_config_a.sh
-#   ./run_config_a.sh
+#   ./run_config_a.sh            # uses session.json as it is
+#   ./run_config_a.sh P07 3      # participant P07, block 3 (writes session.json first)
 #
 # World: tools/start_world.sh <call_set from session.json>; PX4 binds to egle_drone.
 
@@ -17,6 +18,13 @@ REPO_DIR="$HOME/UAV-Triage"
 LOG_DIR="$REPO_DIR/logs"
 TAB_DIR="$LOG_DIR/tab_scripts"
 PX4_LOG="$LOG_DIR/px4_session.log"
+
+# Optional: ./run_config_a.sh P07 3  -> session.json for participant P07, block 3 (H4,
+# tools/session_setup.py). Without arguments the existing session.json is used.
+if [ $# -ge 2 ]; then
+    python3 "$REPO_DIR/tools/session_setup.py" "$1" "$2" || { echo "Session setup failed."; exit 1; }
+    echo ""
+fi
 
 # Gazebo world = the call set named in session.json (UAV_SESSION overrides the path).
 SESSION_FILE="${UAV_SESSION:-$REPO_DIR/session.json}"
