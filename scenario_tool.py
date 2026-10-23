@@ -63,7 +63,7 @@ if any(a in sys.argv for a in ("--pool", "--set", "--sets")):
         sys.exit(0)
 
     if "--sets" in sys.argv:
-        ids = sorted(f[:-5] for f in os.listdir(call_sets.SET_DIR) if f.endswith(".json") and f not in ("TEMPLATE.json", "DEV.json"))
+        ids = sorted(f[:-5] for f in os.listdir(call_sets.SET_DIR) if f.endswith(".json") and f not in ("TEMPLATE.json", "DEV.json", "WATERTEST.json"))
         rows = []
         for sid in ids:
             try:
