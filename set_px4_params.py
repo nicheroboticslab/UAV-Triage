@@ -13,6 +13,16 @@ from pymavlink import mavutil
 # name: (value, type)
 PARAMS = {
     "GF_ACTION": (1, "int"),   # geofence breach -> warning only (never take control from the pilot script)
+    # D1: DJI Matrice 30T-class limits (decisions log 3.1). The documented PX4
+    # ranges are XY <= 20 and Z down <= 4; the read-back below shows whether
+    # PX4 holds the M30T values.
+    "MPC_XY_VEL_MAX": (23.0, "real"),    # m/s horizontal cap (operator and agent)
+    "MPC_Z_VEL_MAX_UP": (6.0, "real"),   # m/s ascent
+    "MPC_Z_VEL_MAX_DN": (5.0, "real"),   # m/s descent
+    "RTL_RETURN_ALT": (30.0, "real"),    # m, emergency return (LB+RB) altitude
+    # D4: PX4's own autonomous cruise speed (used by return-to-launch) matches
+    # the agent's fixed cruise speed (AGENT_CRUISE_MS in the pilot script).
+    "MPC_XY_CRUISE": (14.0, "real"),
 }
 
 INT32 = mavutil.mavlink.MAV_PARAM_TYPE_INT32

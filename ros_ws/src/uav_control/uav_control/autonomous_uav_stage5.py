@@ -95,6 +95,11 @@ CONFIDENCE_LOW               = 50
 SIGNAL_LOSS_PATTERN_THRESHOLD = 2
 LOITER_RADIUS                = 15.0   # metres
 LOITER_OMEGA                 = 0.3    # rad/s  (~21s per orbit)
+# D4: fixed agent cruise speed, model-derived maximum-range speed (decisions
+# log 3.3, ~14.4 m/s). Not chosen by the LLM. PX4 caps both agent and operator
+# at MPC_XY_VEL_MAX (set_px4_params.py).
+AGENT_CRUISE_MS              = 14.0
+AGENT_ACCEL_MS2              = 2.5    # carrot speed ramp up/down (m/s^2)
 
 # LLM request settings (F1). Fixed for the study; change only with a new
 # software version, since they affect agent behaviour.
@@ -1286,6 +1291,36 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
     #  LOITER UPDATE
     # =========================================================
 
+    def _setpoint_pos_vel(self):
+        """Position and velocity feed-forward sent to PX4 this cycle.
+        MANUAL: the operator's target, plus the gamepad stick velocity if any.
+        Agent: a carrot moved toward target_pos at AGENT_CRUISE_MS (D4), so the
+        agent flies at a fixed, model-derived speed instead of PX4's cap.
+        target_pos itself stays the agent's goal, so arrival logic is unchanged."""
+        tgt = [float(v) for v in self.target_pos]
+        if self.drone_state == DroneState.MANUAL:
+            self._carrot = None
+            mv = getattr(self, "manual_vel", None)
+            return tgt, ([float(v) for v in mv] if mv is not None else [0.0, 0.0, 0.0])
+        dt = self.timer_period
+        if getattr(self, "_carrot", None) is None:
+            self._carrot   = [float(self.current_pos[0]), float(self.current_pos[1])]
+            self._carrot_v = 0.0
+        dx, dy = tgt[0] - self._carrot[0], tgt[1] - self._carrot[1]
+        d      = math.hypot(dx, dy)
+        # Accelerate to cruise, hold, then decelerate so it stops at the goal.
+        v_stop = math.sqrt(2.0 * AGENT_ACCEL_MS2 * d)
+        v      = min(AGENT_CRUISE_MS, self._carrot_v + AGENT_ACCEL_MS2 * dt, v_stop)
+        self._carrot_v = v
+        step   = v * dt
+        if d <= max(step, 0.05):
+            self._carrot   = [tgt[0], tgt[1]]
+            self._carrot_v = 0.0
+            return tgt, [0.0, 0.0, 0.0]
+        ux, uy = dx / d, dy / d
+        self._carrot = [self._carrot[0] + ux * step, self._carrot[1] + uy * step]
+        return ([self._carrot[0], self._carrot[1], tgt[2]], [ux * v, uy * v, 0.0])
+
     def update_loiter(self):
         if not self.loitering or self.circle_center is None: return
         self.circle_angle += LOITER_OMEGA * self.timer_period
@@ -1508,7 +1543,9 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
         # ---- Send trajectory setpoint ----
         sp           = TrajectorySetpoint()
         sp.timestamp = timestamp
-        sp.position  = [float(v) for v in self.target_pos]
+        pos, vel     = self._setpoint_pos_vel()
+        sp.position  = pos
+        sp.velocity  = vel
         sp.yaw       = (self.manual_yaw
                         if (self.drone_state == DroneState.MANUAL
                             and getattr(self, 'manual_yaw', None) is not None)

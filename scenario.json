@@ -2,8 +2,8 @@
   "_help": "Edit this file to change the scenario. Coordinates are decimal degrees (Google Maps right-click -> copy). West longitude is negative. Relaunch after editing.",
   "home": {
     "name": "Lab",
-    "lat": 42.320306,
-    "lon": -83.234194,
+    "lat": 42.320278,
+    "lon": -83.234139,
     "alt_m": 185
   },
   "cruise_alt_m": 10,
