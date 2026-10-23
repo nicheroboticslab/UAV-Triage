@@ -1,0 +1,57 @@
+{
+  "L05/S5b": {
+    "east_m": 46.8,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": 27.0
+  },
+  "L06/S2a": {
+    "east_m": -15.0,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": -26.0
+  },
+  "L09/S2a": {
+    "east_m": -23.4,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": -13.5
+  },
+  "L09/S2c": {
+    "east_m": 0.0,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": -30.0
+  },
+  "L10/S5b": {
+    "east_m": -15.5,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": 58.0
+  },
+  "L14/S4b": {
+    "east_m": 0.0,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": 0.0
+  },
+  "L17/S2a": {
+    "east_m": -3.0,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": -5.2
+  },
+  "L18/S2a": {
+    "east_m": -4.2,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": -4.2
+  },
+  "L28/S4b": {
+    "east_m": 0.0,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": 0.0
+  },
+  "_help": "Scene offset from the call pin (m east, m north), per location/scenario. Written by tools/make_world.py; reused on every build. Edit by hand if needed."
+}

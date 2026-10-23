@@ -16,6 +16,7 @@ import json
 import math
 import os
 import sys
+import time
 
 REPO = os.path.expanduser(os.environ.get("UAV_REPO", "~/UAV-Triage"))
 sys.path.insert(0, os.path.join(REPO, "ros_ws/src/uav_control/uav_control"))
@@ -40,16 +41,100 @@ def box(name, x, y, z, sx, sy, sz, rgba, yaw=0.0, collide=True):
             f'<material><ambient>{rgba}</ambient><diffuse>{rgba}</diffuse></material></visual></link></model>\n')
 
 
-def water(name, x, y, size, depth):
-    # translucent flood water patch; top surface at 'depth' metres above ground
-    return box(name, x, y, depth / 2, size, size, depth, "0.25 0.32 0.35 0.75", collide=False)
+# Flood water (decisions 7.8): category -> depth of water above its base.
+# Knee (~0.5 m) is the shallow/deep line; depths sit clearly either side.
+# Depth is read from what is naturally at the scene: people's legs, car wheels.
+WATER_DEPTH_M = {"standing_shallow": 0.15, "standing_deep": 1.00, "flowing": 0.15}   # default level per category
+# Four depth levels (Ben, 23 Oct 13:41), measured on an adult standing in it:
+# none / ankle (foam ring at the ankles) / waist / neck. A call may set
+# truth["depth"] to one of these; otherwise the category default above applies
+# (shallow -> ankle, deep -> waist, flowing -> ankle).
+WATER_LEVEL_M = {"none": 0.0, "ankle": 0.15, "waist": 1.00, "neck": 1.45}
 
 
-def people(prefix, x, y, n, z=0.0, spacing=1.2, sitting=0):
+def depth_for(t):
+    lv = t.get("depth")
+    if lv is not None:
+        if lv not in WATER_LEVEL_M:
+            raise ValueError(f"unknown depth level {lv!r} (use {', '.join(WATER_LEVEL_M)})")
+        return WATER_LEVEL_M[lv]
+    cat = t.get("water")
+    return WATER_DEPTH_M.get(cat, 0.0) if cat and cat != "none" else 0.0
+WATER_TEX = os.path.join(REPO, "models", "flood_water", "textures")   # tools/make_water_textures.py
+WATER_TRANSPARENCY = 0.3      # 70 % opaque (Ben, 23 Oct)
+FLOOD_BASE_M = 0.10           # world-wide flood sheet depth; scenes raise the level locally
+FLOOD_SIZE_M = 4000.0         # = ground plane
+FLOOD_RGBA = "0.40 0.44 0.45 1"   # blue-grey-brown, matches the standing texture
+FOAM_RGBA = "0.86 0.83 0.76 1"
+FOAM_R = 0.45                 # foam collar radius around a person at the waterline (m)
+WAKE_LEN = 1.6                # flowing: wake trail downstream of each person (m)
+
+
+def water(name, x, y, sx, sy, category, base=0.0, flow_yaw=0.0, depth=None):
+    """Flood-water slab from the ground to base + depth(category).
+    base = height of the surface the water lies on (e.g. a bridge deck).
+    flowing: static streak/foam texture, streaks along flow_yaw (rad, ENU,
+    0 = east). No animation, so nothing flickers."""
+    if not category or category == "none":
+        return ""
+    if category not in WATER_DEPTH_M:
+        raise ValueError(f"{name}: unknown water category {category!r}")
+    top = base + (WATER_DEPTH_M[category] if depth is None else depth)
+    if top <= base:
+        return ""
+    tex = os.path.join(WATER_TEX, "flowing.png" if category == "flowing" else "standing.png")
+    return (f'    <model name="{name}"><static>true</static><pose>{x:.2f} {y:.2f} {top / 2:.3f} 0 0 {flow_yaw:.3f}</pose>'
+            f'<link name="l"><visual name="v"><cast_shadows>false</cast_shadows>'
+            f'<transparency>{WATER_TRANSPARENCY}</transparency>'
+            f'<geometry><box><size>{sx} {sy} {top:.3f}</size></box></geometry>'
+            f'<material><diffuse>1 1 1 1</diffuse><specular>0.35 0.35 0.35 1</specular>'
+            f'<pbr><metal><albedo_map>{tex}</albedo_map><roughness>0.2</roughness><metalness>0</metalness></metal></pbr>'
+            f'</material></visual></link></model>\n')
+
+
+def flood_sheet():
+    """World-wide shallow flood (Ben, 23 Oct): everything low is under water;
+    each call scene sets its own level on top (shallow / deep / flowing)."""
+    return (f'    <model name="flood_sheet"><static>true</static><pose>0 0 {FLOOD_BASE_M / 2:.3f} 0 0 0</pose>'
+            f'<link name="l"><visual name="v"><cast_shadows>false</cast_shadows>'
+            f'<transparency>{WATER_TRANSPARENCY}</transparency>'
+            f'<geometry><box><size>{FLOOD_SIZE_M} {FLOOD_SIZE_M} {FLOOD_BASE_M}</size></box></geometry>'
+            f'<material><ambient>{FLOOD_RGBA}</ambient><diffuse>{FLOOD_RGBA}</diffuse>'
+            f'<specular>0.35 0.35 0.35 1</specular></material></visual></link></model>\n')
+
+
+def water_top(category, base=0.0, depth=None):
+    if not category or category == "none":
+        return None
+    d = WATER_DEPTH_M[category] if depth is None else depth
+    return base + d if d > 0 else None
+
+
+def foam(name, x, y, top, flowing=False, flow_yaw=0.0):
+    """Light foam collar at the waterline around a person (and a wake trail
+    downstream when flowing): shows at a glance that they stand in water and
+    where the water reaches on their legs."""
+    out = (f'    <model name="{name}"><static>true</static><pose>{x:.2f} {y:.2f} {top + 0.01:.3f} 0 0 0</pose>'
+           f'<link name="l"><visual name="v"><cast_shadows>false</cast_shadows>'
+           f'<geometry><cylinder><radius>{FOAM_R}</radius><length>0.02</length></cylinder></geometry>'
+           f'<material><ambient>{FOAM_RGBA}</ambient><diffuse>{FOAM_RGBA}</diffuse></material></visual></link></model>\n')
+    if flowing:
+        wx = x + math.cos(flow_yaw) * (FOAM_R + WAKE_LEN / 2)
+        wy = y + math.sin(flow_yaw) * (FOAM_R + WAKE_LEN / 2)
+        out += box(f"{name}_wake", wx, wy, top + 0.01, WAKE_LEN, 0.35, 0.02, FOAM_RGBA, yaw=flow_yaw, collide=False)
+    return out
+
+
+def people(prefix, x, y, n, z=0.0, spacing=1.2, sitting=0, water=None, flow_yaw=0.0):
+    """water = (category, base): people standing in it get a foam collar."""
     out = ""
+    top = water_top(*water) if water else None
     for i in range(n):
         uri = PERSON_SIT if i < sitting else PERSON
-        out += include(uri, f"{prefix}_p{i}", x + (i - (n - 1) / 2) * spacing, y, z, yaw=1.57)
+        px = x + (i - (n - 1) / 2) * spacing
+        out += include(uri, f"{prefix}_p{i}", px, y, z, yaw=1.57)
+        if top is not None and top > z:
+            out += foam(f"{prefix}_p{i}_foam", px, y, top, water[0] == "flowing", flow_yaw)
     return out
 
 
@@ -59,26 +144,74 @@ def building(prefix, x, y):
 
 
 # outcome code -> scene builder(prefix, x, y, truth)
-def t_S2a(p, x, y, t):   # N people at the entrance
-    return building(p, x, y) + water(f"{p}_w", x, y - 4, 30, 0.3) + people(p, x, y - 1.5, t["people"])
+def t_S2a(p, x, y, t):   # N people at the entrance, standing in the water
+    return (building(p, x, y) + water(f"{p}_w", x, y - 8, 34, 16, t["water"], depth=depth_for(t))
+            + people(p, x, y - 1.5, t["people"], water=(t["water"], 0.0, depth_for(t))))
 
-def t_S2c(p, x, y, t):   # N people nearby, outside the building
-    return building(p, x, y) + water(f"{p}_w", x, y - 4, 30, 0.3) + people(p, x + 14, y - 6, t["people"])
+def t_S2c(p, x, y, t):   # N people nearby, outside the building, standing in the water
+    return (building(p, x, y) + water(f"{p}_w", x + 4, y - 8, 40, 16, t["water"], depth=depth_for(t))
+            + people(p, x + 14, y - 6, t["people"], water=(t["water"], 0.0, depth_for(t))))
 
-def t_S4b(p, x, y, t):   # bridge submerged with N people on it
-    return (box(f"{p}_bridge", x, y, 0.4, 3, 30, 0.4, "0.45 0.40 0.35 1")
-            + water(f"{p}_w", x, y, 40, 0.6) + people(p, x, y, t["people"], z=0.6, spacing=2.0))
+def t_S4b(p, x, y, t):   # bridge awash with N people on it; channel flows +x, bridge runs along y
+    deck, length, width = 0.6, 28.0, 3.0
+    cat = t["water"]
+    base = deck if cat == "flowing" else 0.0
+    rail = "0.75 0.75 0.72 1"
+    out = box(f"{p}_bridge", x, y, deck / 2, width, length, deck, "0.45 0.40 0.35 1")
+    for side in (-1, 1):                              # railings stand well above the water
+        rx = x + side * (width / 2 - 0.05)
+        out += box(f"{p}_rail{side + 1}", rx, y, deck + 1.1, 0.08, length, 0.08, rail, collide=False)
+        for k in range(int(length // 2) + 1):
+            out += box(f"{p}_post{side + 1}_{k}", rx, y - length / 2 + 2 * k, deck + 0.55, 0.1, 0.1, 1.1, rail, collide=False)
+    for end in (-1, 1):                               # banks / abutments, dry, above the water
+        out += box(f"{p}_bank{end + 1}", x, y + end * (length / 2 + 1), 0.6, 12, 6, 1.2, "0.42 0.40 0.34 1")
+    dep = depth_for(t)
+    out += water(f"{p}_w", x, y, 60, length - 6, cat, base=base, depth=dep)      # channel between the banks
+    if cat == "flowing":                              # foam piled against the upstream side of the deck
+        out += box(f"{p}_pile", x - width / 2 - 0.4, y, water_top(cat, base, dep) + 0.01, 0.8, length - 6, 0.02,
+                   FOAM_RGBA, collide=False)
+    top = water_top(cat, base, dep)
+    n = t["people"]
+    for i in range(n):                                # people spaced along the deck
+        py = y + (i - (n - 1) / 2) * 2.0
+        out += include(PERSON, f"{p}_p{i}", x, py, deck, yaw=0.0)
+        if top is not None and top > deck:
+            out += foam(f"{p}_p{i}_foam", x, py, top, cat == "flowing", 0.0)
+    return out
 
-def t_S5b(p, x, y, t):   # several occupied cars in a lot (occupants visible next to/on cars)
-    out = water(f"{p}_w", x, y, 40, 0.3)
+def t_S5b(p, x, y, t):   # several cars in a lot, people beside some; depth readable on the wheels
+    out = water(f"{p}_w", x, y, 40, 24, t["water"], depth=depth_for(t))
     for i in range(6):
         cx, cy = x - 10 + (i % 3) * 8, y - 3 + (i // 3) * 6
         out += include(CAR, f"{p}_car{i}", cx, cy, 0, 1.57)
+    top = water_top(t["water"], 0.0, depth_for(t))
     for i in range(t["people"]):   # one person beside each of the first N cars
-        out += include(PERSON, f"{p}_p{i}", x - 10 + i * 8 + 1.6, y - 3, 0, 1.57)
+        px, py = x - 10 + i * 8 + 1.6, y - 3
+        out += include(PERSON, f"{p}_p{i}", px, py, 0, 1.57)
+        if top is not None:
+            out += foam(f"{p}_p{i}_foam", px, py, top, t["water"] == "flowing")
     return out
 
 TEMPLATES = {"S2a": t_S2a, "S2c": t_S2c, "S4b": t_S4b, "S5b": t_S5b}
+# Scene footprint (xmin, xmax, ymin, ymax) relative to the anchor, used to keep
+# the whole scene clear of real (OSM) buildings. Placeholder buildings excluded.
+EXTENT = {"S2a": (-17, 17, -16, 0), "S2c": (-16, 24, -16, 0),
+          "S4b": (-30, 30, -18, 18), "S5b": (-20, 20, -12, 12)}
+PLACE_MAX_M = 120.0
+# Recorded scene offsets (committed): "<location>/<scenario_code>" -> offset of
+# the scene from the call pin, metres east/north. Recorded entries are always
+# reused, so every build and every participant gets the same scene position.
+# New entries are found once (place_clear) and appended. Edit by hand if a
+# recorded spot turns out to be inside a building (the build warns).
+OFFSETS_FILE = os.path.join(REPO, "calls", "scene_offsets.json")
+
+
+def load_offsets():
+    try:
+        return json.load(open(OFFSETS_FILE))
+    except FileNotFoundError:
+        return {"_help": "Scene offset from the call pin (m east, m north), per location/scenario. "
+                         "Written by tools/make_world.py; reused on every build. Edit by hand if needed."}
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +303,44 @@ def outside_point(x, y, buildings, margin=3.0):
     return x, y, False
 
 
+def _bbox(pts):
+    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+    return min(xs), max(xs), min(ys), max(ys)
+
+
+def footprint_clear(x, y, ext, buildings, step=2.0):
+    x0, x1, y0, y1 = x + ext[0], x + ext[1], y + ext[2], y + ext[3]
+    for b in buildings:
+        bx0, bx1, by0, by1 = b.setdefault("_bbox", _bbox(b["pts"]))
+        if bx1 < x0 or bx0 > x1 or by1 < y0 or by0 > y1:
+            continue
+        if any(x0 <= px <= x1 and y0 <= py <= y1 for px, py in b["pts"]):
+            return False
+        gx = x0
+        while gx <= x1 + 1e-6:
+            gy = y0
+            while gy <= y1 + 1e-6:
+                if point_in_poly(gx, gy, b["pts"]):
+                    return False
+                gy += step
+            gx += step
+    return True
+
+
+def place_clear(x, y, ext, buildings):
+    """Nearest anchor (spiral search, 3 m rings, 15 deg) at which the whole
+    scene footprint is clear of buildings. Returns (x, y, moved_m) or None."""
+    r = 0.0
+    while r <= PLACE_MAX_M:
+        angles = [0] if r == 0 else range(0, 360, 15)
+        for a in angles:
+            cx, cy = x + r * math.cos(math.radians(a)), y + r * math.sin(math.radians(a))
+            if footprint_clear(cx, cy, ext, buildings):
+                return cx, cy, r
+        r += 3.0
+    return None
+
+
 def ground_tiles(meta):
     out = ""
     for k, t in enumerate(meta["tiles"]):
@@ -230,14 +401,35 @@ def world(set_id):
     if geo:
         building = lambda p, x, y: ""   # real OSM buildings replace the placeholder box
     body, missing, moved = "", [], []
+    offsets, new_offsets = load_offsets(), []
     for c in calls:
         n, e, _ = c["pos"]
-        if geo:
+        code = c.get("scenario_code")
+        key = f'{c["location"]}/{code}'
+        if key in offsets:
+            de, dn = offsets[key]["east_m"], offsets[key]["north_m"]
+            e, n = e + de, n + dn
+            if geo and code in EXTENT and not footprint_clear(e, n, EXTENT[code], geo["buildings"]):
+                print(f"WARNING {c['call_id']} {key}: recorded offset overlaps a building; edit calls/scene_offsets.json")
+            if de or dn:
+                moved.append(f"{c['call_id']} {math.hypot(de, dn):.0f} m (recorded)")
+        elif geo and code in EXTENT:
+            res = place_clear(e, n, EXTENT[code], geo["buildings"])
+            if res is None:
+                print(f"WARNING {c['call_id']}: no building-free spot within {PLACE_MAX_M:.0f} m; scene may overlap a building")
+                res = (e, n, 0.0)
+            offsets[key] = {"east_m": round(res[0] - e, 1), "north_m": round(res[1] - n, 1),
+                            "found": time.strftime("%Y-%m-%d"), "method": "place_clear"}
+            new_offsets.append(key)
+            if res[2] > 0:
+                moved.append(f"{c['call_id']} {res[2]:.0f} m (new)")
+            e, n = e + offsets[key]["east_m"], n + offsets[key]["north_m"]
+        elif geo:
             e2, n2, was_inside = outside_point(e, n, geo["buildings"])
             if was_inside:
                 moved.append(c["call_id"])
                 e, n = e2, n2
-        code = c.get("scenario_code")
+        c["scene_en"] = (round(e, 1), round(n, 1))
         tmpl = TEMPLATES.get(code)
         if tmpl is None:
             missing.append(f'{c["call_id"]}:{code}')
@@ -279,7 +471,7 @@ def world(set_id):
       <visual name="visual"><geometry><plane><normal>0 0 1</normal><size>4000 4000</size></plane></geometry>
         <material><ambient>0.30 0.33 0.28 1</ambient><diffuse>0.30 0.33 0.28 1</diffuse></material></visual>
     </link></model>
-{ground_tiles(geo["meta"]) if geo else ""}{buildings_model(geo["buildings"]) if geo else ""}{trees_model(geo["trees"]) if geo else ""}{drone()}{body}  </world>
+{ground_tiles(geo["meta"]) if geo else ""}{flood_sheet()}{buildings_model(geo["buildings"]) if geo else ""}{trees_model(geo["trees"]) if geo else ""}{drone()}{body}  </world>
 </sdf>
 '''
     out = os.path.join(REPO, "worlds", f"{name}.sdf")
@@ -292,9 +484,15 @@ def world(set_id):
               f"(height from tag {src['height']}, levels {src['levels']}, default {src['default']}; "
               f"tallest {hs[-1] if hs else 0:.1f} m), {len(geo['trees'])} trees; skipped {geo['skipped']}")
         if moved:
-            print("Call props moved outside a building footprint:", ", ".join(moved))
+            print("Scenes moved clear of buildings (from the call pin):", ", ".join(moved))
     else:
         print("No geo/ data: flat ground (run tools/fetch_geo.py)")
+    if new_offsets:
+        json.dump(offsets, open(OFFSETS_FILE, "w"), indent=2, sort_keys=True)
+        print(f"Recorded new scene offsets in calls/scene_offsets.json: {', '.join(new_offsets)}")
+    scenes = {c["call_id"]: {"location": c["location"], "pin_en": [round(c["pos"][1], 1), round(c["pos"][0], 1)],
+                             "scene_en": list(c.get("scene_en", (c["pos"][1], c["pos"][0])))} for c in calls}
+    json.dump(scenes, open(os.path.join(REPO, "worlds", f"{name}_scenes.json"), "w"), indent=2)
     return out, name, missing
 
 
