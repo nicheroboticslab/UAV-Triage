@@ -35,5 +35,5 @@ if [ -n "$SID" ] && [ -f "$TAB_DIR/session_pids" ]; then
         fi
     done < "$TAB_DIR/session_pids"
 fi
-rm -f /tmp/uav_dashboard_state.json
+rm -f /tmp/uav_dashboard_state.json /tmp/uav_start_signal
 echo "[stop] done"

@@ -1,7 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- EGLe drone: PX4 x500 with a forward camera pitched 45 degrees down (E3).
-     Based on PX4-gazebo-models x500_mono_cam_down (pitch 1.5707 = straight down).
-     Future: replace the fixed joint with a gimbal for operator-controlled tilt. -->
+<!-- EGLe drone: PX4 x500 with PX4's stabilised 3-axis camera gimbal (E3).
+     Same composition as PX4-gazebo-models x500_gimbal; the model name differs,
+     so PX4 must start with PX4_GZ_MODEL_NAME=egle_drone and the gz_x500_gimbal
+     target (airframe 4019 sets the MNT_* gimbal parameters).
+     PX4's GZGimbal publishes /model/egle_drone/command/gimbal_{roll,pitch,yaw}
+     and reads link camera_link / sensor camera_imu; the camera sensor is
+     "camera" on camera_link, which camera_view.py finds automatically.
+     The operator steers pitch/yaw with the right stick (controller_input.py),
+     sent to PX4 as MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW (px4_battery_display.py). -->
 <sdf version="1.9">
   <model name="egle_drone">
     <self_collide>false</self_collide>
@@ -9,14 +15,12 @@
       <uri>model://x500</uri>
     </include>
     <include merge="true">
-      <uri>model://mono_cam</uri>
-      <pose>0.12 0 0.05 0 0.7854 0</pose>
-      <name>mono_cam</name>
+      <uri>model://gimbal</uri>
+      <pose>0 0 0.26 0 0 3.14</pose>
     </include>
-    <joint name="CameraJoint" type="fixed">
+    <joint name="GimbalAttachJoint" type="fixed">
       <parent>base_link</parent>
-      <child>camera_link</child>
-      <pose relative_to="base_link">0.12 0 0.05 0 0.7854 0</pose>
+      <child>cgo3_mount_link</child>
     </joint>
   </model>
 </sdf>
