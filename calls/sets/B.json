@@ -1,0 +1,120 @@
+{
+  "_help": "Study set B (rotates with tau, Graeco-Latin square). Source: claude/call-scenario-assignments.md, call sets v5 (claude/call_sets.json) (23 Oct 2026). Route order L05, L23, L24, L21, L18. priority 1..5 = urgency order (P1 first), ties by route order.",
+  "set_id": "B",
+  "route_order": [
+    "L05",
+    "L23",
+    "L24",
+    "L21",
+    "L18"
+  ],
+  "calls": [
+    {
+      "call_id": "C1",
+      "location": "L24",
+      "priority": 1,
+      "urgency": "P1",
+      "call_type": "S4",
+      "scenario_code": "S4a",
+      "details": "People are stuck on the bridge over the river.",
+      "condition": {
+        "worst": "mobile",
+        "in_water": false
+      },
+      "truth": {
+        "people": 4,
+        "water_depth": "Chest or deeper",
+        "water_motion": "Flowing",
+        "priority": "P1",
+        "depth": "neck",
+        "water": "flowing"
+      }
+    },
+    {
+      "call_id": "C2",
+      "location": "L05",
+      "priority": 2,
+      "urgency": "P2",
+      "call_type": "S5",
+      "scenario_code": "S5a",
+      "details": "Someone is stuck in a car on the bottom level of the parking structure.",
+      "condition": {
+        "worst": "immobile_responsive",
+        "in_water": false
+      },
+      "truth": {
+        "people": 1,
+        "water_depth": "Knee to waist",
+        "water_motion": "Standing",
+        "priority": "P2",
+        "depth": "waist",
+        "water": "standing_deep"
+      }
+    },
+    {
+      "call_id": "C3",
+      "location": "L21",
+      "priority": 3,
+      "urgency": "P3",
+      "call_type": "S6",
+      "scenario_code": "S6a",
+      "details": "Hotel guests waiting outside, can't leave.",
+      "condition": {
+        "worst": "mobile",
+        "in_water": false
+      },
+      "truth": {
+        "people": 5,
+        "water_depth": "Below knee",
+        "water_motion": "Standing",
+        "priority": "P3",
+        "depth": "ankle",
+        "water": "standing_shallow"
+      }
+    },
+    {
+      "call_id": "C4",
+      "location": "L18",
+      "priority": 4,
+      "urgency": "P3",
+      "call_type": "S2",
+      "scenario_code": "S2a",
+      "details": "Students trapped in the apartment building, ground floor flooded.",
+      "condition": {
+        "worst": "mobile",
+        "in_water": false
+      },
+      "truth": {
+        "people": 4,
+        "water_depth": "Below knee",
+        "water_motion": "Standing",
+        "priority": "P3",
+        "depth": "ankle",
+        "water": "standing_shallow"
+      }
+    },
+    {
+      "call_id": "C5",
+      "location": "L23",
+      "priority": 5,
+      "urgency": "P4",
+      "call_type": "S1",
+      "scenario_code": "S1e",
+      "details": "A maintenance vehicle went into the water on the golf course.",
+      "condition": {
+        "worst": "none",
+        "in_water": false
+      },
+      "truth": {
+        "people": 0,
+        "water_depth": "None",
+        "water_motion": "None",
+        "priority": "P4",
+        "depth": "none",
+        "water": "none"
+      }
+    }
+  ],
+  "hazards": [],
+  "prompts": []
+}

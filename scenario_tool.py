@@ -71,7 +71,7 @@ if any(a in sys.argv for a in ("--pool", "--set", "--sets")):
             except ValueError as e:
                 print(f'{sid}: INVALID - {e}')
         if rows:
-            exp = [r for r in rows if not r[0].upper().startswith("T")]   # training set excluded from matching
+            exp = [r for r in rows if r[0].upper() not in ("T", "BASELINE")]   # training/baseline excluded from matching
             mean = sum(r[2]["total_s"] for r in exp) / len(exp) if exp else 0
             print(f'{"SET":<6} {"CALLS":>5} {"ROUTE_km":>8} {"TIME_min":>8} {"vs_mean":>8} {"BATT_%":>6}  TYPES')
             for sid, calls, m in rows:
