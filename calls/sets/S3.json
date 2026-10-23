@@ -1,0 +1,58 @@
+{
+  "_help": "Priorities are PLACEHOLDERS set to the optimal tour order (agent visits by priority). Reassign by urgency once call types / scenario codes are set. Experimental set; matched on optimal route time (scenario_tool.py --sets).",
+  "set_id": "S3",
+  "calls": [
+    {
+      "call_id": "C1",
+      "location": "L07",
+      "priority": 1,
+      "call_type": null,
+      "scenario_code": null,
+      "condition": {},
+      "details": "",
+      "truth": {}
+    },
+    {
+      "call_id": "C2",
+      "location": "L24",
+      "priority": 2,
+      "call_type": null,
+      "scenario_code": null,
+      "condition": {},
+      "details": "",
+      "truth": {}
+    },
+    {
+      "call_id": "C3",
+      "location": "L13",
+      "priority": 3,
+      "call_type": null,
+      "scenario_code": null,
+      "condition": {},
+      "details": "",
+      "truth": {}
+    },
+    {
+      "call_id": "C4",
+      "location": "L19",
+      "priority": 4,
+      "call_type": null,
+      "scenario_code": null,
+      "condition": {},
+      "details": "",
+      "truth": {}
+    },
+    {
+      "call_id": "C5",
+      "location": "L10",
+      "priority": 5,
+      "call_type": null,
+      "scenario_code": null,
+      "condition": {},
+      "details": "",
+      "truth": {}
+    }
+  ],
+  "hazards": [],
+  "prompts": []
+}

@@ -7,14 +7,23 @@ Reads ~/UAV-Triage/scenario.json — edit that file, not this one.
 """
 import json, os, sys, time
 from pymavlink import mavutil
+sys.path.insert(0, os.path.expanduser("~/UAV-Triage/ros_ws/src/uav_control/uav_control"))
+import call_sets
 
 PATH = os.environ.get("UAV_SCENARIO", os.path.expanduser("~/UAV-Triage/scenario.json"))
 sc = json.load(open(PATH))
 h = sc["home"]; cruise = float(sc.get("cruise_alt_m", 10))
 
 items = [("BASE (" + h.get("name", "home") + ")", h["lat"], h["lon"], float(sc.get("base", {}).get("alt_m", 5)))]
-for s in sorted(sc["sectors"], key=lambda s: s["priority"]):
-    items.append((f'{s["name"]} {s.get("label","")}'.strip(), s["lat"], s["lon"], float(s.get("alt_m", cruise))))
+SESSION_PATH = os.environ.get("UAV_SESSION", os.path.expanduser("~/UAV-Triage/session.json"))
+call_set = json.load(open(SESSION_PATH))["block"].get("call_set") if os.path.isfile(SESSION_PATH) else None
+if call_set:   # C4: markers for the block's calls (generic labels only)
+    _, calls = call_sets.resolve(call_set, h, cruise)
+    for c in sorted(calls, key=lambda c: c["priority"]):
+        items.append((f'{c["call_id"]} {c["label"]}', c["lat"], c["lon"], -c["pos"][2]))
+else:
+    for s in sorted(sc["sectors"], key=lambda s: s["priority"]):
+        items.append((f'{s["name"]} {s.get("label","")}'.strip(), s["lat"], s["lon"], float(s.get("alt_m", cruise))))
 
 print(f"Scenario: {PATH}")
 print("QGC#  NAME")
