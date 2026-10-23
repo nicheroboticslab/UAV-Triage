@@ -1,0 +1,32 @@
+{
+  "_help": "Battery model settings (D2/D3). Values marked PROPOSED need confirmation in Experiment Design.",
+  "vehicle": {
+    "_source": "Zeng et al. 2019 Eq. 6, fitted 23 Oct to decisions log 3.4 (hover 433 W, min 385 W at ~8 m/s, 507 W at 15, 1025 W at 23); radius, mass, k, delta from decisions log 3.3 / Experiment Design chat",
+    "mass_kg": 3.77,
+    "rotors": 4,
+    "rotor_radius_m": 0.203,
+    "air_density": 1.225,
+    "induced_correction_k": 0.1,
+    "profile_drag_coeff": 0.012,
+    "tip_speed_ms": 160.0,
+    "rotor_solidity": 0.055,
+    "flat_plate_area_m2": 0.1
+  },
+  "battery": {
+    "usable_energy_wh": 128.3,
+    "_energy_note": "PROPOSED: scaled so the return gate falls at 13.5 min for a reference profile of 60% cruise at 14 m/s + 40% hover (456 W). Decisions log 4.1/4.7: gate ~12-15 min.",
+    "nominal_voltage_v": 22.2,
+    "_voltage_note": "Assumed 6S x 3.7 V. With voltage_model 'constant' it only affects the logged current, not the %.",
+    "voltage_model": "constant"
+  },
+  "gate": {
+    "warn_pct": 30.0,
+    "return_pct": 20.0,
+    "_note": "PROPOSED. At return_pct: forced PX4 return-to-launch and land; block ends (D3). Reserve check: a 1 km return at 14 m/s plus climb and landing uses ~15 Wh, below the 20% reserve."
+  },
+  "wind_ned_ms": [
+    0.0,
+    0.0
+  ],
+  "log_hz": 2.0
+}
