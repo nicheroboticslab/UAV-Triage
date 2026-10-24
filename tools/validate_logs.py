@@ -11,7 +11,11 @@ A run is the set of files sharing one stamp:
   inaction_<id>.jsonl  session header + inaction episodes (A7)
   battery_<id>.jsonl   config header + 2 Hz samples (D6)
   controls_<id>.jsonl  10 Hz stick/button/gimbal samples
-  nofly_<id>.jsonl     no-fly zone events (legacy)
+  nofly_<id>.jsonl     no-fly zone events (legacy; replaced by condition_ when a call set is used)
+  condition_<id>.jsonl Condition config + 1 Hz samples + impact / no-fly events (G1)
+  reports_<id>.jsonl   report portal: config, field changes, submissions (E4)
+  tasks_<id>.jsonl     secondary tasks: shown / opened / answer / expired (H5)
+  meta_<id>.json       provenance snapshot (H6/H7)
 
 Prints PASS / WARN / FAIL lines and a summary; exit code 1 if any FAIL.
 """
@@ -158,6 +162,63 @@ def check_flight(rows):
     return rows
 
 
+def check_condition(rows):
+    if not rows:
+        return
+    cfg = [r for r in rows if r.get("type") == "config"]
+    out("PASS" if cfg else "FAIL", f"condition: config header {'present' if cfg else 'missing'}"
+        + (f" ({len(cfg[0].get('zones', []))} no-fly zones)" if cfg else ""))
+    smp = [r for r in rows if r.get("type") == "sample"]
+    g = gaps([r["t_s"] for r in smp], 1.0)
+    out("PASS" if smp and not g else "WARN", f"condition: {len(smp)} samples, {len(g)} gap(s) > 3 s")
+    ev = {}
+    for r in rows:
+        if r.get("type") not in ("config", "sample"):
+            ev[r["type"]] = ev.get(r["type"], 0) + 1
+    last = smp[-1]["condition_pct"] if smp else None
+    out("INFO", f"condition: final {last} %, events {ev}")
+    if any(r.get("condition_pct", 100) < 0 or r.get("condition_pct", 0) > 100 for r in rows if "condition_pct" in r):
+        out("FAIL", "condition: value outside 0-100")
+
+
+def check_portal(reps, tasks):
+    if not reps and not tasks:
+        return
+    cfg = next((r for r in reps if r.get("type") == "config"), None)
+    out("PASS" if cfg else "FAIL", f"reports: config header {'present' if cfg else 'missing'}")
+    subs = [r for r in reps if r.get("type") == "submit"]
+    fields = (cfg or {}).get("fields", {})
+    badv = [r["call"] for r in subs if any(k in fields and v not in fields[k] for k, v in r["fields"].items())]
+    out("PASS" if not badv else "FAIL", f"reports: {len(subs)} submission(s) for {len({r['call'] for r in subs})} call(s)"
+        + (f"; invalid values for {badv}" if badv else ""))
+    nosnap = sum(1 for r in subs if not (r.get("snapshot") or {}).get("pos_ned"))
+    if nosnap:
+        out("WARN", f"reports: {nosnap} submission(s) without vehicle position (pilot state missing?)")
+    lst = next((r["tasks"] for r in tasks if r.get("type") == "task_list"), [])
+    final = {}
+    for r in tasks:
+        if r.get("task") and r.get("type") in ("shown", "answer", "expired", "not_shown"):
+            final[r["task"]] = r["type"]
+    cnt = {}
+    for t in lst:
+        cnt[final.get(t["id"], "pending")] = cnt.get(final.get(t["id"], "pending"), 0) + 1
+    out("INFO", f"tasks: {len(lst)} scripted, outcome {cnt}")
+    if cnt.get("shown"):
+        out("WARN", f"tasks: {cnt['shown']} task(s) still open at the end of the log (portal stopped before expiry)")
+
+
+def check_meta(d, rid):
+    p = os.path.join(d, f"meta_{rid}.json")
+    if not os.path.exists(p):
+        out("WARN", "meta: file missing (H6 provenance)")
+        return
+    m = json.load(open(p))
+    g = m.get("git", {})
+    dirty = g.get("status_porcelain") or []
+    out("PASS" if not dirty else "WARN", f"meta: git {str(g.get('commit'))[:10]} on {g.get('branch')}"
+        + (f", {len(dirty)} uncommitted file(s)" if dirty else ", clean"))
+
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     d = sys.argv[sys.argv.index("--dir") + 1] if "--dir" in sys.argv else DATA
@@ -173,7 +234,7 @@ def main():
     print(f"Run {rid} in {d}\n")
 
     data = {}
-    for kind in ("flight", "inaction", "battery", "controls", "nofly"):
+    for kind in ("flight", "inaction", "battery", "controls", "nofly", "condition", "reports", "tasks"):
         p = os.path.join(d, f"{kind}_{rid}.jsonl")
         if os.path.exists(p):
             rows, bad = load(p)
@@ -182,7 +243,10 @@ def main():
                 out("FAIL", f"{kind}: {bad} unparseable line(s)")
         else:
             data[kind] = []
-            out("WARN" if kind in ("nofly", "flight", "controls") else "FAIL", f"{kind}: file missing")
+            if kind in ("nofly", "condition", "reports", "tasks"):
+                out("INFO", f"{kind}: no file")
+            else:
+                out("WARN" if kind in ("flight", "controls") else "FAIL", f"{kind}: file missing")
 
     # control-live time from the decision event logs, if present
     live = None
@@ -200,6 +264,9 @@ def main():
     b = check_battery(data["battery"])
     c = check_controls(data["controls"])
     check_flight(data["flight"])
+    check_condition(data["condition"])
+    check_portal(data["reports"], data["tasks"])
+    check_meta(d, rid)
     if data["nofly"]:
         out("WARN", f"nofly: {len(data['nofly'])} zone events — no-fly zones are dropped from the design but still loaded")
 
