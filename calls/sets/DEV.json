@@ -1,0 +1,28 @@
+{
+  "_help": "Development set for testing the loader in SITL; not part of the study.",
+  "set_id": "DEV",
+  "calls": [
+    {
+      "call_id": "C1",
+      "location": "L01",
+      "priority": 1,
+      "call_type": "occupied_vehicle",
+      "scenario_code": "car_in_water",
+      "condition": {},
+      "details": "Test call",
+      "truth": {}
+    },
+    {
+      "call_id": "C2",
+      "location": "L07",
+      "priority": 2,
+      "call_type": "people_on_structure",
+      "scenario_code": "on_roof",
+      "condition": {},
+      "details": "Test call",
+      "truth": {}
+    }
+  ],
+  "hazards": [],
+  "prompts": []
+}

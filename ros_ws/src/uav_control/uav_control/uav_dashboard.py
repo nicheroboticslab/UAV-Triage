@@ -1,22 +1,24 @@
 #!/usr/bin/env python3
 """
-UAV Operator Dashboard — Stage 4
-=================================
+UAV Operator Dashboard
+======================
 Standalone curses-based live display for the UAV autonomous system.
-Run this in a SEPARATE terminal while autonomous_uav_stage4.py is running.
+Run this in a SEPARATE terminal while autonomous_uav_stage5.py is running.
 
 Usage:
     python3 uav_dashboard.py
 
 Reads /tmp/uav_dashboard_state.json written by the ROS node every 0.5s.
-Press Q to quit the dashboard (does NOT stop the drone).
+Hold Back/Select on the controller for 2 s to stop the whole session (tools/stop_session.sh: pilot
+script, PX4, Gazebo, DDS agent, QGC, camera, and the launcher's windows).
+Any other key after Q cancels.
 
 What it shows:
-  - Drone state, flight time, battery bar, EKF, signal status
+  - EGLe mode (MANUAL / AUTONOMOUS / RETURNING / HOLD / LANDED), flight time,
+    battery bar, EKF. No countdown or timer to the takeover delay (E1).
   - Last LLM decision: intent, target, confidence, full reasoning
   - Next checkpoint
   - Last 8 flight log entries
-  - Post-signal-loss re-entry indicator
   - Dwell countdown when active
 """
 
@@ -24,6 +26,7 @@ import curses
 import json
 import time
 import os
+import subprocess
 import sys
 
 DASHBOARD_STATE_FILE = "/tmp/uav_dashboard_state.json"
@@ -110,21 +113,19 @@ def draw_dashboard(stdscr, state: dict):
     battery_low   = state.get("battery_low", False)
     ekf_conf      = state.get("ekf_confidence", 0.0)
     ekf_ok        = state.get("ekf_ok", True)
-    signal_lost   = state.get("signal_lost", False)
-    loss_count    = state.get("signal_loss_count", 0)
     llm_running   = state.get("llm_running", False)
-    post_reentry  = state.get("post_reentry", False)
     dwell_active  = state.get("dwell_active", False)
     dwell_rem     = state.get("dwell_remaining", 0.0)
 
-    # State color
-    state_color = 2 if drone_state == "MANUAL" else (3 if "FLYING" in drone_state else 6)
-    llm_tag     = "  🧠THINKING" if llm_running else ("  📡RE-ENTRY" if post_reentry else "")
-    dwell_tag   = f"  ⏳DWELL {dwell_rem:.0f}s" if dwell_active else ""
+    # E1: EGLe mode, steady colour per mode, no flashing, no timer to tau
+    mode = state.get("egle_state") or ("MANUAL" if drone_state == "MANUAL" else "AUTONOMOUS")
+    mode_color = {"MANUAL": 2, "AUTONOMOUS": 6, "RETURNING": 3, "HOLD": 5, "LANDED": 1}.get(mode, 1)
+    llm_tag    = "  🧠THINKING" if (llm_running and mode == "AUTONOMOUS") else ""
+    dwell_tag  = f"  ⏳DWELL {dwell_rem:.0f}s" if (dwell_active and mode == "AUTONOMOUS") else ""
 
     put(row, 0, "║", 5)
-    put(row, 2, f"State : ", 1)
-    put(row, 10, f"{drone_state}{llm_tag}{dwell_tag}", state_color, bold=True)
+    put(row, 2, "Mode  : ", 1)
+    put(row, 10, f"{mode}{llm_tag}{dwell_tag}", mode_color, bold=True)
     put(row, W - 14, f"Time: {flight_time}", 5)
     put(row, W - 1, "║", 5); row += 1
 
@@ -135,19 +136,23 @@ def draw_dashboard(stdscr, state: dict):
     put(row, 11, battery_bar(battery_pct), batt_color, bold=battery_crit)
     put(row, W - 1, "║", 5); row += 1
 
-    # EKF + Signal row
+    # Condition row (G1): vehicle damage; red inside a no-fly zone
+    cond = state.get("condition_pct")
+    if cond is not None:
+        zone = state.get("nofly_zone")
+        c_color = 4 if (zone or cond <= 25) else (3 if cond <= 60 else 2)
+        put(row, 0, "║", 5)
+        put(row, 2, "Condit.: ", 1)
+        put(row, 11, battery_bar(cond) + (f"   IN NO-FLY ZONE: {zone}" if zone else ""), c_color, bold=bool(zone))
+        put(row, W - 1, "║", 5); row += 1
+
+    # EKF row ("Signal: LOST" and loss count removed, E1)
     ekf_color  = 2 if ekf_ok else 4
     ekf_label  = f"{ekf_conf:.2f} {'✓ GOOD' if ekf_conf >= 0.75 else ('⚠ MOD' if ekf_conf >= 0.4 else '✗ CRIT')}"
-    sig_color  = 4 if signal_lost else 2
-    sig_label  = "✗ LOST" if signal_lost else "✓ OK"
-    loss_label = f"  Losses: {loss_count}" if loss_count > 0 else ""
 
     put(row, 0, "║", 5)
     put(row, 2,  "EKF    : ", 1)
     put(row, 11, ekf_label, ekf_color)
-    put(row, 30, "Signal: ", 1)
-    put(row, 38, sig_label, sig_color, bold=signal_lost)
-    put(row, 46, loss_label, 3 if loss_count >= 2 else 1)
     put(row, W - 1, "║", 5); row += 1
 
     # Position row
@@ -235,11 +240,11 @@ def draw_dashboard(stdscr, state: dict):
                 put(row, 0, "║", 5)
                 # Color-code key event types
                 color = 1
-                if "CRITICAL" in entry or "ABORT" in entry or "LOST" in entry:
+                if "CRITICAL" in entry or "ABORT" in entry:
                     color = 4
                 elif "WARNING" in entry or "LOW" in entry or "⚠" in entry:
                     color = 3
-                elif "LLM decided" in entry or "ARRIVED" in entry or "regained" in entry:
+                elif "LLM decided" in entry or "ARRIVED" in entry or "Control returned" in entry:
                     color = 2
                 elif "TEST" in entry:
                     color = 6
@@ -251,7 +256,7 @@ def draw_dashboard(stdscr, state: dict):
         put(row, 0, "╚" + "═" * (W - 2) + "╝", 5); row += 1
     if row < max_y - 1:
         age = time.time() - state.get("timestamp", time.time())
-        footer = f" Press Q to quit  |  Last update: {age:.1f}s ago  |  Dashboard v4 "
+        footer = f" Hold Back 2 s = stop session  |  Last update: {age:.1f}s ago  |  Dashboard v4 "
         put(row, 0, footer.center(W), 5)
 
     stdscr.refresh()
@@ -287,8 +292,6 @@ def main_loop(stdscr):
         # Check for Q to quit
         try:
             ch = stdscr.getch()
-            if ch in (ord('q'), ord('Q')):
-                break
         except Exception:
             pass
 
@@ -301,8 +304,8 @@ def main_loop(stdscr):
             stdscr.erase()
             stdscr.addstr(0, 0, "Waiting for UAV system to start...")
             stdscr.addstr(1, 0, f"Looking for: {DASHBOARD_STATE_FILE}")
-            stdscr.addstr(2, 0, "Make sure autonomous_uav_stage4.py is running.")
-            stdscr.addstr(4, 0, "Press Q to quit.")
+            stdscr.addstr(2, 0, "Make sure autonomous_uav_stage5.py is running.")
+            stdscr.addstr(4, 0, "Hold Back/Select on the controller for 2 s to stop the session.")
             stdscr.refresh()
             time.sleep(REFRESH_RATE)
             continue
@@ -321,7 +324,7 @@ def main_loop(stdscr):
 
 def main():
     print(f"UAV Dashboard — looking for state file: {DASHBOARD_STATE_FILE}")
-    print("Starting in 1 second... Press Q inside dashboard to quit.\n")
+    print("Starting in 1 second... Hold Back/Select on the controller for 2 s to stop the whole session.\n")
     time.sleep(1.0)
 
     try:
@@ -329,7 +332,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        print("\nDashboard closed. Drone continues flying.")
+        print("\nDashboard closed.")
 
 
 if __name__ == '__main__':

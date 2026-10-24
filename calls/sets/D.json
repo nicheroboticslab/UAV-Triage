@@ -1,0 +1,125 @@
+{
+  "_help": "Study set D (rotates with tau, Graeco-Latin square). Source: claude/call-scenario-assignments.md, call sets v5 (claude/call_sets.json) (23 Oct 2026). Route order L04, L15, L20, L08, L27. priority 1..5 = urgency order (P1 first), ties by route order.",
+  "set_id": "D",
+  "route_order": [
+    "L04",
+    "L15",
+    "L20",
+    "L08",
+    "L27"
+  ],
+  "calls": [
+    {
+      "call_id": "C1",
+      "location": "L08",
+      "priority": 1,
+      "urgency": "P1",
+      "call_type": "S2",
+      "scenario_code": "S2d",
+      "details": "Two people trapped at the building entrance, one isn't moving.",
+      "condition": {
+        "worst": "unresponsive",
+        "in_water": false
+      },
+      "truth": {
+        "people": 2,
+        "water_depth": "Below knee",
+        "water_motion": "Standing",
+        "priority": "P1",
+        "water_scored": true,
+        "depth": "ankle",
+        "water": "standing_shallow"
+      }
+    },
+    {
+      "call_id": "C2",
+      "location": "L04",
+      "priority": 2,
+      "urgency": "P2",
+      "call_type": "S3",
+      "scenario_code": "S3a",
+      "details": "Someone is standing by the pond and the water is coming up fast.",
+      "condition": {
+        "worst": "mobile",
+        "in_water": false
+      },
+      "truth": {
+        "people": 1,
+        "water_depth": "Knee to waist",
+        "water_motion": "Standing",
+        "priority": "P2",
+        "water_scored": true,
+        "depth": "waist",
+        "water": "standing_deep"
+      }
+    },
+    {
+      "call_id": "C3",
+      "location": "L15",
+      "priority": 3,
+      "urgency": "P3",
+      "call_type": "S6",
+      "scenario_code": "S6a",
+      "details": "A bunch of students are stuck at the bus stop, water all around.",
+      "condition": {
+        "worst": "mobile",
+        "in_water": false
+      },
+      "truth": {
+        "people": 5,
+        "water_depth": "Below knee",
+        "water_motion": "Standing",
+        "priority": "P3",
+        "water_scored": true,
+        "depth": "ankle",
+        "water": "standing_shallow"
+      }
+    },
+    {
+      "call_id": "C4",
+      "location": "L20",
+      "priority": 4,
+      "urgency": "P3",
+      "call_type": "S1",
+      "scenario_code": "S1d",
+      "details": "Car stalled in the drive-through, someone's inside.",
+      "condition": {
+        "worst": "mobile",
+        "in_water": false
+      },
+      "truth": {
+        "people": 1,
+        "water_depth": "Below knee",
+        "water_motion": "Standing",
+        "priority": "P3",
+        "water_scored": true,
+        "depth": "ankle",
+        "water": "standing_shallow"
+      }
+    },
+    {
+      "call_id": "C5",
+      "location": "L27",
+      "priority": 5,
+      "urgency": "P4",
+      "call_type": "S4",
+      "scenario_code": "S4c",
+      "details": "People stuck by the dam at the powerhouse.",
+      "condition": {
+        "worst": "none",
+        "in_water": false
+      },
+      "truth": {
+        "people": 0,
+        "water_depth": "Knee to waist",
+        "water_motion": "Flowing",
+        "priority": "P4",
+        "water_scored": false,
+        "depth": "waist",
+        "water": "flowing"
+      }
+    }
+  ],
+  "hazards": [],
+  "prompts": []
+}

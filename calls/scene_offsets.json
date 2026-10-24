@@ -1,0 +1,207 @@
+{
+  "L01/S1b": {
+    "east_m": 0.0,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": 0.0
+  },
+  "L02/S2a": {
+    "east_m": -4.7,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": -17.4
+  },
+  "L03/S2e": {
+    "east_m": -33.0,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": 0.0
+  },
+  "L04/S3a": {
+    "east_m": 0.0,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": 0.0
+  },
+  "L05/S5a": {
+    "east_m": 46.8,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": 27.0
+  },
+  "L05/S5b": {
+    "east_m": 46.8,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": 27.0
+  },
+  "L06/S2a": {
+    "east_m": -15.0,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": -26.0
+  },
+  "L06/S2b": {
+    "east_m": -43.5,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": -11.6
+  },
+  "L07/S3c": {
+    "east_m": 0.0,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": -33.0
+  },
+  "L08/S2d": {
+    "east_m": -37.7,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": -10.1
+  },
+  "L09/S2a": {
+    "east_m": -23.4,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": -13.5
+  },
+  "L09/S2c": {
+    "east_m": 0.0,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": -30.0
+  },
+  "L10/S5b": {
+    "east_m": -15.5,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": 58.0
+  },
+  "L11/S5c": {
+    "east_m": 54.0,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": 0.0
+  },
+  "L12/S6b": {
+    "east_m": -13.5,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": 23.4
+  },
+  "L13/S2b": {
+    "east_m": 0.0,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": 0.0
+  },
+  "L14/S1a": {
+    "east_m": 0.0,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": 0.0
+  },
+  "L14/S4b": {
+    "east_m": 0.0,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": 0.0
+  },
+  "L15/S6a": {
+    "east_m": 0.0,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": 0.0
+  },
+  "L16/S6c": {
+    "east_m": -26.1,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": -7.0
+  },
+  "L17/S2a": {
+    "east_m": -3.0,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": -5.2
+  },
+  "L18/S2a": {
+    "east_m": -4.2,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": -4.2
+  },
+  "L19/S5a": {
+    "east_m": 0.0,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": 0.0
+  },
+  "L20/S1d": {
+    "east_m": -7.0,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": -26.1
+  },
+  "L21/S6a": {
+    "east_m": 0.0,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": 21.0
+  },
+  "L22/S6b": {
+    "east_m": 0.0,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": 0.0
+  },
+  "L23/S1e": {
+    "east_m": -23.2,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": 6.2
+  },
+  "L24/S4a": {
+    "east_m": 0.0,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": 0.0
+  },
+  "L25/S3b": {
+    "east_m": 0.0,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": 0.0
+  },
+  "L26/S3a": {
+    "east_m": 0.0,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": 0.0
+  },
+  "L27/S4c": {
+    "east_m": 0.0,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": 0.0
+  },
+  "L28/S4b": {
+    "east_m": 0.0,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": 0.0
+  },
+  "L29/S1c": {
+    "east_m": -30.0,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": 0.0
+  },
+  "L30/S3a": {
+    "east_m": 14.5,
+    "found": "2026-10-23",
+    "method": "place_clear",
+    "north_m": 3.9
+  },
+  "_help": "Scene offset from the call pin (m east, m north), per location/scenario. Written by tools/make_world.py; reused on every build. Edit by hand if needed."
+}

@@ -1,0 +1,125 @@
+{
+  "_help": "Baseline tutorial set (block 1 for every participant, not analysed). Source: claude/call-scenario-assignments.md, call sets v5 (claude/call_sets.json) (23 Oct 2026). Route order L03, L13, L17, L28, L07. priority 1..5 = urgency order (P1 first), ties by route order.",
+  "set_id": "BASELINE",
+  "route_order": [
+    "L03",
+    "L13",
+    "L17",
+    "L28",
+    "L07"
+  ],
+  "calls": [
+    {
+      "call_id": "C1",
+      "location": "L28",
+      "priority": 1,
+      "urgency": "P1",
+      "call_type": "S4",
+      "scenario_code": "S4b",
+      "details": "People were crossing the footbridge and it's under water now.",
+      "condition": {
+        "worst": "mobile",
+        "in_water": true
+      },
+      "truth": {
+        "people": 2,
+        "water_depth": "Knee to waist",
+        "water_motion": "Flowing",
+        "priority": "P1",
+        "water_scored": true,
+        "depth": "waist",
+        "water": "flowing"
+      }
+    },
+    {
+      "call_id": "C2",
+      "location": "L13",
+      "priority": 2,
+      "urgency": "P2",
+      "call_type": "S2",
+      "scenario_code": "S2b",
+      "details": "Our apartment is flooding, we're on the balcony.",
+      "condition": {
+        "worst": "mobile",
+        "in_water": false
+      },
+      "truth": {
+        "people": 2,
+        "water_depth": "Knee to waist",
+        "water_motion": "Standing",
+        "priority": "P2",
+        "water_scored": true,
+        "depth": "waist",
+        "water": "standing_deep"
+      }
+    },
+    {
+      "call_id": "C3",
+      "location": "L17",
+      "priority": 3,
+      "urgency": "P3",
+      "call_type": "S2",
+      "scenario_code": "S2a",
+      "details": "People are trapped in the movie theater.",
+      "condition": {
+        "worst": "mobile",
+        "in_water": false
+      },
+      "truth": {
+        "people": 3,
+        "water_depth": "Below knee",
+        "water_motion": "Standing",
+        "priority": "P3",
+        "water_scored": true,
+        "depth": "ankle",
+        "water": "standing_shallow"
+      }
+    },
+    {
+      "call_id": "C4",
+      "location": "L03",
+      "priority": 4,
+      "urgency": "P4",
+      "call_type": "S2",
+      "scenario_code": "S2e",
+      "details": "Students trapped inside the liberal arts building.",
+      "condition": {
+        "worst": "none",
+        "in_water": false
+      },
+      "truth": {
+        "people": 0,
+        "water_depth": "None",
+        "water_motion": "None",
+        "priority": "P4",
+        "water_scored": false,
+        "depth": "none",
+        "water": "none"
+      }
+    },
+    {
+      "call_id": "C5",
+      "location": "L07",
+      "priority": 5,
+      "urgency": "P4",
+      "call_type": "S3",
+      "scenario_code": "S3c",
+      "details": "I saw someone walking by the river behind the nature center.",
+      "condition": {
+        "worst": "none",
+        "in_water": false
+      },
+      "truth": {
+        "people": 0,
+        "water_depth": "Chest or deeper",
+        "water_motion": "Flowing",
+        "priority": "P4",
+        "water_scored": false,
+        "depth": "neck",
+        "water": "flowing"
+      }
+    }
+  ],
+  "hazards": [],
+  "prompts": []
+}

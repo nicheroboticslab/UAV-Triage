@@ -1,0 +1,125 @@
+{
+  "_help": "Study set E (rotates with tau, Graeco-Latin square). Source: claude/call-scenario-assignments.md, call sets v5 (claude/call_sets.json) (23 Oct 2026). Route order L01, L12, L11, L30, L09. priority 1..5 = urgency order (P1 first), ties by route order.",
+  "set_id": "E",
+  "route_order": [
+    "L01",
+    "L12",
+    "L11",
+    "L30",
+    "L09"
+  ],
+  "calls": [
+    {
+      "call_id": "C1",
+      "location": "L01",
+      "priority": 1,
+      "urgency": "P1",
+      "call_type": "S1",
+      "scenario_code": "S1b",
+      "details": "We drove under the Ford Rd overpass and stalled. Two of us are stuck inside.",
+      "condition": {
+        "worst": "mobile",
+        "in_water": false
+      },
+      "truth": {
+        "people": 2,
+        "water_depth": "Knee to waist",
+        "water_motion": "Flowing",
+        "priority": "P1",
+        "water_scored": true,
+        "depth": "waist",
+        "water": "flowing"
+      }
+    },
+    {
+      "call_id": "C2",
+      "location": "L12",
+      "priority": 2,
+      "urgency": "P2",
+      "call_type": "S6",
+      "scenario_code": "S6b",
+      "details": "Residents are gathered at the leasing office, a couple are hurt.",
+      "condition": {
+        "worst": "immobile_responsive",
+        "in_water": false
+      },
+      "truth": {
+        "people": 4,
+        "water_depth": "Below knee",
+        "water_motion": "Standing",
+        "priority": "P2",
+        "water_scored": true,
+        "depth": "ankle",
+        "water": "standing_shallow"
+      }
+    },
+    {
+      "call_id": "C3",
+      "location": "L30",
+      "priority": 3,
+      "urgency": "P3",
+      "call_type": "S3",
+      "scenario_code": "S3a",
+      "details": "Visitor stranded by the pond at the estate.",
+      "condition": {
+        "worst": "mobile",
+        "in_water": false
+      },
+      "truth": {
+        "people": 1,
+        "water_depth": "Below knee",
+        "water_motion": "Standing",
+        "priority": "P3",
+        "water_scored": true,
+        "depth": "ankle",
+        "water": "standing_shallow"
+      }
+    },
+    {
+      "call_id": "C4",
+      "location": "L09",
+      "priority": 4,
+      "urgency": "P3",
+      "call_type": "S2",
+      "scenario_code": "S2c",
+      "details": "People trapped inside the science building.",
+      "condition": {
+        "worst": "mobile",
+        "in_water": false
+      },
+      "truth": {
+        "people": 2,
+        "water_depth": "Below knee",
+        "water_motion": "Standing",
+        "priority": "P3",
+        "water_scored": true,
+        "depth": "ankle",
+        "water": "standing_shallow"
+      }
+    },
+    {
+      "call_id": "C5",
+      "location": "L11",
+      "priority": 5,
+      "urgency": "P4",
+      "call_type": "S5",
+      "scenario_code": "S5c",
+      "details": "There's a person in a car in the Fairlane Center lot.",
+      "condition": {
+        "worst": "none",
+        "in_water": false
+      },
+      "truth": {
+        "people": 0,
+        "water_depth": "Chest or deeper",
+        "water_motion": "Standing",
+        "priority": "P4",
+        "water_scored": false,
+        "depth": "neck",
+        "water": "standing_deep"
+      }
+    }
+  ],
+  "hazards": [],
+  "prompts": []
+}

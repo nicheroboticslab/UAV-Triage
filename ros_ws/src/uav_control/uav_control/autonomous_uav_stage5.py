@@ -13,13 +13,26 @@ from px4_msgs.msg import (
 )
 import time
 import subprocess
+import urllib.request
 import re
 import json
 import math
 import threading
 import os
+import sys
+import hashlib
+import inspect
+from nofly_monitor import NoFlyMonitor
+from session_config import load_session
+from run_meta import write_meta
+from inaction_log import InactionLog
+from battery_model import BatterySystem, load_config as load_battery_config
+from hazards import ConditionMonitor, load_config as load_condition_config
+from agent_planner import Planner, load_config as load_agent_config
+import flood_prompt
+from px4_battery_display import PX4BatteryDisplay
+import call_sets
 from datetime import datetime
-from pynput import keyboard
 from enum import Enum
 from uav_control.controller_input import ControllerInput
 
@@ -39,30 +52,72 @@ class Intent(Enum):
 # ============================================================
 #  MAP DEFINITION
 # ============================================================
-MAP = {
-    "sectors": [
-        {"id": 0, "name": "SECTOR_A", "priority": 1, "pos": [100.0,   0.0, -10.0]},
-        {"id": 1, "name": "SECTOR_B", "priority": 2, "pos": [ 50.0, 100.0, -10.0]},
-        {"id": 2, "name": "SECTOR_C", "priority": 3, "pos": [  0.0,-100.0, -10.0]},
-        {"id": 3, "name": "SECTOR_D", "priority": 4, "pos": [-100.0,  0.0, -10.0]},
-        {"id": 4, "name": "SECTOR_E", "priority": 5, "pos": [ 80.0,  80.0, -10.0]},
-    ],
-    "base":        [0.0,  0.0,  -5.0],
-    "comms_point": [30.0, 30.0, -25.0],
-    "targets": [
-        {"id": 0, "pos": [ 60.0,  40.0, -8.0], "confirmed": False},
-        {"id": 1, "pos": [-40.0,  60.0, -8.0], "confirmed": False},
-    ],
-}
+# ============================================================
+#  SCENARIO — loaded from ~/UAV-Triage/scenario.json
+#  Edit that file to change sectors, targets, comms point, home.
+# ============================================================
+import json as _json
+import math as _math
+
+SCENARIO_FILE = os.environ.get("UAV_SCENARIO", os.path.expanduser("~/UAV-Triage/scenario.json"))
+
+def _load_scenario(path):
+    with open(path) as f:
+        sc = _json.load(f)
+    hlat, hlon = sc["home"]["lat"], sc["home"]["lon"]
+    cruise = float(sc.get("cruise_alt_m", 10.0))
+    m_lat = 111320.0
+    m_lon = 111320.0 * _math.cos(_math.radians(hlat))
+    def ned(p, default_alt):   # GPS -> local [north, east, down] metres from home
+        return [round((p["lat"] - hlat) * m_lat, 1),
+                round((p["lon"] - hlon) * m_lon, 1),
+                -float(p.get("alt_m", default_alt))]
+    return {
+        "sectors": [{"id": i, "name": s["name"], "priority": s["priority"], "pos": ned(s, cruise)}
+                    for i, s in enumerate(sc["sectors"])],
+        "base": [0.0, 0.0, -float(sc.get("base", {}).get("alt_m", 5.0))],
+        "transit_alt_m": float(sc.get("transit_alt_m", cruise)),
+        "comms_point": ned(sc["comms_point"], 25.0),
+        "targets": [{"id": i, "pos": ned(t, 8.0), "confirmed": False}
+                    for i, t in enumerate(sc.get("targets", []))],
+    }
+
+MAP = _load_scenario(SCENARIO_FILE)
 
 # ============================================================
 #  THRESHOLDS & TIMINGS
 # ============================================================
-KEYBOARD_TIMEOUT             = 15.0
+# Takeover delay (tau) comes from session.json, not from this file (A1/A3).
+# tau_s = null in session.json is the control condition: no takeover (A4).
+SESSION                      = load_session()
+TAU_S                        = SESSION["tau_s"]
+# D2/D3: script-driven battery (battery.json); PX4's simulated battery is logged only.
+BATT_CFG, BATT_CFG_PATH      = load_battery_config()
+# C4: if the block names a call set, its calls replace the scenario.json sectors.
+CALL_SET_ID                  = SESSION["block"].get("call_set")
+if CALL_SET_ID:
+    with open(SCENARIO_FILE) as _f:
+        _sc = _json.load(_f)
+    _cs, _calls = call_sets.resolve(CALL_SET_ID, _sc["home"], float(_sc.get("cruise_alt_m", 10.0)))
+    MAP["sectors"] = call_sets.as_sectors(_calls)
+    CALL_TEXT = {c["call_id"]: c.get("details", "") for c in _cs["calls"]}
+else:
+    CALL_TEXT = {}
+PORTAL_STATE_FILE = "/tmp/uav_portal_state.json"
+# Rooftop home (Ben, 24 Oct): PX4's local frame starts on the pad, home.roof_m above
+# the ground. scenario.json altitudes (cruise at a call, transit) are above the
+# ground, so convert them to pad-relative NED here; base stays relative to the pad.
+with open(SCENARIO_FILE) as _f:
+    HOME_ROOF_M = float(_json.load(_f)["home"].get("roof_m") or 0.0)
+for _s in MAP["sectors"]:
+    _s["pos"][2] += HOME_ROOF_M
+for _t in MAP["targets"]:
+    _t["pos"][2] += HOME_ROOF_M
+MAP["comms_point"][2] += HOME_ROOF_M
+MAP["transit_alt_m"] -= HOME_ROOF_M
 BATTERY_LOW_THRESH           = 25.0
 BATTERY_CRIT_THRESH          = 15.0
 EKF_CONF_MIN                 = 0.4
-COMMLOSS_SCORE_THRESH        = 1
 WAYPOINT_REACH_DIST          = 3.0
 DWELL_TIME                   = 20.0
 INTENT_REQUERY_INTERVAL      = 30.0
@@ -72,6 +127,65 @@ CONFIDENCE_LOW               = 50
 SIGNAL_LOSS_PATTERN_THRESHOLD = 2
 LOITER_RADIUS                = 15.0   # metres
 LOITER_OMEGA                 = 0.3    # rad/s  (~21s per orbit)
+# D4: fixed agent cruise speed, model-derived maximum-range speed (decisions
+# log 3.3, ~14.4 m/s). Not chosen by the LLM. PX4 caps both agent and operator
+# at MPC_XY_VEL_MAX (set_px4_params.py).
+AGENT_CRUISE_MS              = 14.0
+AGENT_ACCEL_MS2              = 2.5    # carrot speed ramp up/down (m/s^2)
+def _make_tone():
+    import struct, wave
+    rate = 44100
+    n = int(rate * TONE_S)
+    fade = int(rate * 0.01)
+    with wave.open(TONE_FILE, "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate)
+        frames = bytearray()
+        for i in range(n):
+            env = min(1.0, i / fade, (n - 1 - i) / fade)
+            frames += struct.pack("<h", int(32767 * TONE_GAIN * env * math.sin(2 * math.pi * TONE_HZ * i / rate)))
+        w.writeframes(bytes(frames))
+
+
+def play_takeover_tone():
+    """Non-blocking; paplay (PulseAudio/PipeWire) or aplay (ALSA). Returns the player used."""
+    if not TAKEOVER_TONE:
+        return None
+    try:
+        if not os.path.exists(TONE_FILE):
+            _make_tone()
+        for player in ("paplay", "aplay"):
+            try:
+                subprocess.Popen([player, TONE_FILE], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return player
+            except FileNotFoundError:
+                continue
+    except Exception:
+        pass
+    return None
+
+
+def _null(v):
+    """Dataset records: the pilot uses the string "None" internally; log JSON null."""
+    return None if v in (None, "None") else v
+
+
+AGENT_YAW_RATE               = 45.0   # deg/s, agent turning toward its travel direction
+# Takeover tone (Experiment Design rec. 4, 24 Oct): one short, non-repeating tone each
+# time the agent takes over; none when control returns to the operator. Played here,
+# at the takeover itself, so its time is exact (MSRT starts from a known cue).
+TAKEOVER_TONE                = os.environ.get("UAV_TAKEOVER_TONE", "1") != "0"
+TONE_HZ, TONE_S, TONE_GAIN   = 880.0, 0.35, 0.30      # moderate volume; 10 ms fades, no click
+TONE_FILE                    = "/tmp/egle_takeover_tone.wav"
+CONTROL_LIVE_ALT_M           = 2.0    # operator control (and tau) starts above this after take-off
+START_SIGNAL_FILE            = "/tmp/uav_start_signal"   # created by start_gate.py on START
+RETURN_REASONS               = ("emergency_return", "battery_gate")
+CONTROL_DT_S                 = 0.05   # control loop period (20 Hz)
+
+# LLM request settings (F1). Fixed for the study; change only with a new
+# software version, since they affect agent behaviour.
+LLM_URL     = "http://localhost:11434"
+LLM_MODEL   = "llama3"
+LLM_OPTIONS = {"temperature": 0.0, "seed": 42}
 
 DASHBOARD_STATE_FILE  = "/tmp/uav_dashboard_state.json"
 DASHBOARD_LOG_DISPLAY = 8
@@ -118,7 +232,7 @@ class DatasetCollector:
                 "battery_pct":              round(kw.get("battery_pct", 0), 1),
                 "ekf_confidence":           round(kw.get("ekf_confidence", 0), 2),
                 "drone_state":              kw.get("drone_state", ""),
-                "current_wp":               kw.get("current_wp", ""),
+                "current_wp":               _null(kw.get("current_wp", "")),
                 "current_pos":              [round(v, 1) for v in kw.get("current_pos", [0,0,0])],
                 "signal_loss_count":        kw.get("signal_loss_count", 0),
                 "post_signal_loss_reentry": kw.get("post_reentry", False),
@@ -128,11 +242,12 @@ class DatasetCollector:
                 "last_loss_duration_s":     round(kw.get("last_loss_duration", 0), 1),
                 "last_loss_battery_cost":   round(kw.get("last_loss_battery_cost", 0), 1),
                 "last_loss_drift_m":        round(kw.get("last_loss_drift", 0), 1),
-                "pre_loss_intent":          kw.get("pre_loss_intent", "None"),
-                "pre_loss_wp":              kw.get("pre_loss_wp", "None"),
+                "pre_loss_intent":          _null(kw.get("pre_loss_intent")),
+                "pre_loss_wp":              _null(kw.get("pre_loss_wp")),
                 "battery_low_thresh":       BATTERY_LOW_THRESH,
                 "battery_crit_thresh":      BATTERY_CRIT_THRESH,
                 "ekf_conf_min":             EKF_CONF_MIN,
+                "tau_s":                    TAU_S,
             },
             "llm_output": {
                 "intent":                kw.get("intent", Intent.HOLD_SAFE).value,
@@ -144,6 +259,8 @@ class DatasetCollector:
                 "response_time_seconds": round(kw.get("response_time_seconds", 0), 2),
                 "fallback_used":         kw.get("fallback_used", False),
                 "was_reentry_decision":  kw.get("was_reentry", False),
+                "llm_meta":              kw.get("llm_meta"),
+                "applied":               kw.get("applied", True),
             },
             "outcome": {
                 "waypoint_reached":             None,
@@ -282,7 +399,7 @@ class UAVAutonomousNode(Node):
         # =====================================================
         #  FIX 1: visited_sectors SET — tracks all visited sectors
         #  Every sector id gets added here when drone arrives.
-        #  When all 5 visited, set resets → full new sweep begins.
+        #  When all sectors are visited, set resets → full new sweep begins.
         # =====================================================
         self.visited_sectors = set()   # set of sector IDs already visited
         self.assigned_sector = 0       # used by CONTINUE_ASSIGNED_TASK
@@ -323,14 +440,85 @@ class UAVAutonomousNode(Node):
         self.waypoint_depart_time     = 0.0
         self.signal_loss_since_depart = False
 
+        # D2/D3/D6: deterministic battery model and return gate
+        self.vel          = [0.0, 0.0, 0.0]
+        self.batt         = BatterySystem(BATT_CFG)
+        self.px4_battery_pct = None
+        self.batt_log_path = os.path.join(
+            DATASET_DIR, f"battery_{datetime.fromtimestamp(self.flight_start_time).strftime('%Y%m%d_%H%M%S')}.jsonl")
+        self.batt_log_every = max(1, int(round(1.0 / (CONTROL_DT_S * BATT_CFG.get("log_hz", 2.0)))))
+        with open(self.batt_log_path, "a") as f:
+            f.write(json.dumps({"type": "config", "battery_file": BATT_CFG_PATH, "config": BATT_CFG,
+                                "timer_period_s": CONTROL_DT_S}) + "\n")
+
+        # D2: QGC shows PX4's simulated battery; make it follow the model.
+        self.home_roof_m = HOME_ROOF_M   # controller_input: altitude floor above the ground
+        self.gimbal_cmd = [45.0, 0.0]   # camera pitch down, yaw right (deg); set by controller_input
+        self.px4_batt_display = PX4BatteryDisplay(lambda: self.batt.pct, self.get_logger(),
+                                                  get_gimbal=lambda: tuple(self.gimbal_cmd))
+        self.px4_batt_display.start()
+
+        # Block end (emergency land is terminal for the block)
+        self.block_ended      = False
+        self.block_end_reason = None
+        self.block_landed     = False
+
+        # Inaction episodes (A7). tau is logged to file only, never to the
+        # dashboard or event log, so it stays hidden from the participant (A3).
+        self.inaction = InactionLog(DATASET_DIR, SESSION, self.flight_start_time)
+        self.get_logger().info(
+            f"[SESSION] {SESSION['path']} sha256={SESSION['sha256'][:12]} -> {self.inaction.filepath}")
+        for w in SESSION["warnings"]:
+            self.get_logger().warn(f"[SESSION] {w}")
+        # H6/H7: provenance snapshot (session, call set, offsets, hazards, git) for this run
+        self.run_id = datetime.fromtimestamp(self.flight_start_time).strftime("%Y%m%d_%H%M%S")
+        try:
+            mp, commit, dirty = write_meta(DATASET_DIR, self.run_id, SESSION, CALL_SET_ID)
+            self.get_logger().info(f"[RUN] {self.run_id} git {commit[:10]}{' (uncommitted changes!)' if dirty else ''} -> {mp}")
+        except Exception as e:
+            self.get_logger().error(f"[RUN] could not write run metadata: {e}")
+
+        # LLM provenance (F1/F2): model digest from Ollama, and a hash of the
+        # prompt-building code so any prompt change is visible in the logs.
+        self._last_llm_meta  = None
+        self.llm_model_digest = self._ollama_model_digest()
+        self.prompt_code_sha256 = hashlib.sha256(
+            inspect.getsource(type(self)._query_llm_intent).encode("utf-8")).hexdigest()
+        self.get_logger().info(
+            f"[LLM] model={LLM_MODEL} digest={str(self.llm_model_digest)[:19]} "
+            f"options={LLM_OPTIONS} prompt_code_sha256={self.prompt_code_sha256[:12]}")
+
         # Loop
         self.counter      = 0
-        self.timer_period = 0.05
+        self.timer_period = CONTROL_DT_S
         self.timer = self.create_timer(self.timer_period, self.loop)
+        # Condition (vehicle damage) and hazards: no-fly zones, buildings, trees, scene objects.
+        # The legacy NoFlyMonitor (scenario.json example zones) is replaced when a call set is loaded.
+        self.cond = None
+        self.cond_log_path = os.path.join(DATASET_DIR, f"condition_{datetime.fromtimestamp(self.flight_start_time).strftime('%Y%m%d_%H%M%S')}.jsonl")
+        if CALL_SET_ID:
+            hz_path = os.path.join(os.path.expanduser("~/UAV-Triage"), "worlds", f"egle_{CALL_SET_ID}_hazards.json")
+            self.cond = ConditionMonitor(hz_path, load_condition_config())
+            if self.cond.ok:
+                self.get_logger().info(f"[CONDITION] {len(self.cond.zones)} no-fly zones, {len(self.cond.buildings)} buildings, "
+                                       f"{len(self.cond.trees)} trees, {len(self.cond.boxes)} scene objects")
+                self._cond_write({"type": "config", "hazards": hz_path, "config": self.cond.cfg,
+                                  "zones": self.cond.zones})
+            else:
+                self.get_logger().error(f"[CONDITION] hazards not loaded ({getattr(self.cond, 'error', '?')}); Condition stays 100 %")
+        self.nofly = None if (self.cond and self.cond.ok) else NoFlyMonitor(DATASET_DIR, self.get_logger(), self.log_event)
+        # F2/G3 (24 Oct): cost-reward routing over the calls, no-fly aware, hold at a call
+        # until the operator has filed its report (agent_planner.py, agent.json).
+        self.planner = Planner(self.cond, BATT_CFG, load_agent_config()) if CALL_SET_ID else None
+        self.reported_calls = set()      # from the report portal
+        self.held_out = set()            # calls the agent left after max_hold_s without a report
+        self.agent_plan = None
+        self._portal_t = 0.0
+        if self.planner:
+            self.get_logger().info(f"[AGENT] planner on: {self.planner.cfg}")
 
-        kbl = keyboard.Listener(on_press=self.on_key_press)
-        kbl.daemon = True
-        kbl.start()
+        self.controller = ControllerInput(self)
+        self.controller.start()
 
         self.log_event(f"System started. Battery: {self.battery_pct:.0f}%. EKF: {self.ekf_confidence:.2f}")
         self._write_dashboard_state()
@@ -362,6 +550,263 @@ class UAVAutonomousNode(Node):
     #  DASHBOARD WRITER
     # =========================================================
 
+    def _end_block(self, reason, ground_target):
+        """Emergency land ends the block: PX4 lands (MAV_CMD_NAV_LAND) and the
+        pilot script stops all decision-making and ignores further input."""
+        if self.block_ended:
+            return
+        self.block_ended      = True
+        self.block_end_reason = reason
+        self.loitering        = False
+        self.dwell_active     = False
+        self.target_pos       = list(ground_target)
+        self.inaction.close(time.time(), self.drone_state.value, "block_ended")
+        self.log_event({"emergency_return": "Emergency return home — block ended.",
+                        "battery_gate": "Battery reserve reached — returning home. Block ended.",
+                        "battery_depleted": "Battery depleted — landing in place. Block ended.",
+                        "crash": "Condition 0 % — vehicle lost. Block ended."}
+                       .get(reason, "Emergency landing — block ended."))
+
+    def _battery_tick(self):
+        """Advance the battery model one control step (fixed dt -> deterministic)."""
+        flying = self.counter >= 120 and not self.block_landed   # from ARM command until landed
+        events = self.batt.step(self.vel, self.timer_period, flying)
+        last   = self.batt.last
+        self.battery_volt = last["voltage_v"]
+        self.battery_amp  = last["current_a"]
+        if not self.battery_override:
+            self.battery_pct = self.batt.pct
+        if "warn" in events:
+            self.log_event(f"Battery low ({self.batt.pct:.0f}%).")
+        if "reserve" in events:
+            self.log_event(f"Battery reserve ({self.batt.pct:.0f}%): about "
+                           f"{self.batt.pct / self.batt.reserve_per_100m * 0.1:.1f} km of flight left.")
+        if "gate" in events:
+            self._battery_gate()
+        if "depleted" in events:
+            self._battery_depleted()
+        if getattr(self, "_batt_log_done", False):
+            return
+        if self.block_landed:
+            self._batt_log_done = True      # one final sample after landing, then stop (log ran for hours before)
+        if self.block_landed or self.counter % self.batt_log_every == 0:
+            rec = {"t_s": round(time.time() - self.flight_start_time, 3), "tick": self.counter,
+                   "pct": round(self.batt.pct, 3),
+                   "condition_pct": round(self.cond.condition, 2) if self.cond and self.cond.ok else None,
+                   "drawn_wh": round(self.batt.battery.drawn_wh, 4),
+                   "power_w": round(last["power_w"], 1), "airspeed_ms": round(last["airspeed_ms"], 2),
+                   "vz_ms": round(self.vel[2], 2), "voltage_v": round(last["voltage_v"], 3),
+                   "current_a": round(last["current_a"], 3), "px4_pct": self.px4_battery_pct,
+                   "state": self.drone_state.value, "egle_state": self._egle_state()}
+            try:
+                with open(self.batt_log_path, "a") as f:
+                    f.write(json.dumps(rec) + "\n")
+            except Exception:
+                pass
+
+    # ---------------- agent routing helpers (F2/G3) ----------------
+    def _call_tick(self):
+        """1 Hz: read reported calls from the portal; mark calls visited by proximity."""
+        now = time.time()
+        if now - self._portal_t < 1.0 or self.planner is None:
+            return
+        self._portal_t = now
+        try:
+            with open(PORTAL_STATE_FILE) as f:
+                ps = json.load(f)
+            if now - ps.get("wall", 0) < 5:
+                new = set(ps.get("reported_calls") or []) - self.reported_calls
+                for c in sorted(new):
+                    self.log_event(f"Operator report filed for {c}.")
+                self.reported_calls |= new
+        except Exception:
+            pass
+        if self.pos_initialized:
+            r = self.planner.cfg["arrive_radius_m"]
+            for sct in MAP["sectors"]:
+                if (sct["id"] not in self.visited_sectors and
+                        math.hypot(sct["pos"][0] - self.current_pos[0], sct["pos"][1] - self.current_pos[1]) <= r):
+                    self.visited_sectors.add(sct["id"])
+                    self.log_event(f"Vehicle over {sct['name']} (inspected).")
+
+    def _hold_for_open_report(self, now):
+        """Takeover while the vehicle is at an unreported call (the operator is most
+        likely filing its report): hold where it is until the report is filed, as on
+        arrival, instead of flying off (Ben, 24 Oct). Returns True if holding."""
+        if self.planner is None or self.block_ended:
+            return False
+        r = self.planner.cfg["hold_radius_m"]
+        near = [(math.hypot(sct["pos"][0] - self.current_pos[0], sct["pos"][1] - self.current_pos[1]), sct)
+                for sct in MAP["sectors"]
+                if sct["name"] not in self.reported_calls and sct["name"] not in self.held_out]
+        near = [x for x in near if x[0] <= r]
+        if not near:
+            return False
+        sct = min(near, key=lambda x: x[0])[1]
+        self.current_wp_name = sct["name"]
+        self.assigned_sector = sct["id"]
+        self.target_pos      = list(self.current_pos)       # keep the operator's view of the scene
+        self.loitering       = False
+        self.current_intent  = Intent.CONTINUE_ASSIGNED_TASK
+        self.drone_state     = DroneState.AUTO_DWELLING
+        self.dwell_start     = now
+        self.dwell_active    = True
+        self.dwell_logged    = False
+        self.waypoint_depart_time = now
+        self.log_event(f"Agent holding at {sct['name']} until its report is filed.")
+        return True
+
+    def _planner_calls(self):
+        return [{"id": sct["name"], "e": sct["pos"][1], "n": sct["pos"][0], "rank": sct["priority"],
+                 "done": sct["name"] in self.reported_calls or sct["name"] in self.held_out}
+                for sct in MAP["sectors"]]
+
+    def _make_plan(self):
+        pos_en = (self.current_pos[1], self.current_pos[0])
+        self.agent_plan = self.planner.plan(pos_en, self.battery_pct, self._planner_calls(),
+                                            time.time() - self.flight_start_time)
+        return self.agent_plan
+
+    def _gate_intent(self):
+        """Battery gate before any LLM query. Planner: distance-aware (cost to fly home
+        + margin); legacy (no call set): fixed thresholds."""
+        if self.planner is not None:
+            g = self.planner.gate((self.current_pos[1], self.current_pos[0]), self.battery_pct)
+            return {7: Intent.ABORT_AND_SAFE, 6: Intent.RETURN_TO_BASE}.get(g)
+        if self.battery_pct < BATTERY_CRIT_THRESH:
+            return Intent.ABORT_AND_SAFE if self.battery_pct < 5.0 else Intent.RETURN_TO_BASE
+        return None
+
+    def _dwell_remaining(self, elapsed):
+        """Seconds left to hold over the current waypoint. At a call with the planner on:
+        hold until the operator reports it (at least min_hold_s), at most max_hold_s."""
+        name = self.current_wp_name
+        if self.planner is None or name not in CALL_TEXT:
+            return DWELL_TIME - elapsed
+        c = self.planner.cfg
+        if name in self.reported_calls:
+            return c["min_hold_s"] - elapsed
+        if elapsed >= c["max_hold_s"]:
+            if name not in self.held_out:
+                self.held_out.add(name)
+                self.log_event(f"No report for {name} after {c['max_hold_s']:.0f} s; moving on.")
+            return 0.0
+        return c["max_hold_s"] - elapsed
+
+    def _flood_prompt(self):
+        plan = self._make_plan()
+        e, n = self.current_pos[1], self.current_pos[0]
+        calls = []
+        for sct in MAP["sectors"]:
+            calls.append({"id": sct["name"], "text": CALL_TEXT.get(sct["name"], ""), "rank": sct["priority"],
+                          "e": sct["pos"][1], "n": sct["pos"][0],
+                          "path_m": self.planner.length((e, n), (sct["pos"][1], sct["pos"][0])),
+                          "visited": sct["id"] in self.visited_sectors, "reported": sct["name"] in self.reported_calls})
+        g = BATT_CFG["gate"]
+        ctx = {"pos_en": (e, n), "battery_pct": self.battery_pct, "home_cost_pct": plan["home_cost_pct"],
+               "condition_pct": self.cond.condition if self.cond and self.cond.ok else 100.0,
+               "in_zone": self.cond.in_zone["name"] if self.cond and self.cond.ok and self.cond.in_zone else None,
+               "heading_to": self.current_wp_name if self.current_wp_name in CALL_TEXT else None,
+               "idle_s": time.time() - self.last_key_time,
+               "holding_for": self.current_wp_name if (self.drone_state == DroneState.AUTO_DWELLING
+                                                       and self.current_wp_name in CALL_TEXT) else None,
+               "calls": calls, "zones": self.cond.zones if self.cond and self.cond.ok else [],
+               "plan": plan, "events": self.get_event_log_string(),
+               "reserve_pct": g.get("reserve_pct") or 0.0, "reserve_per_100m": g.get("reserve_pct_per_100m", 1.0)}
+        return flood_prompt.build_prompt(ctx)
+
+    def _cond_write(self, rec):
+        try:
+            rec = {"t_s": round(time.time() - self.flight_start_time, 3), **rec}
+            with open(self.cond_log_path, "a") as f:
+                f.write(json.dumps(rec) + "\n")
+        except Exception:
+            pass
+
+    def _condition_tick(self):
+        """G1/G4: update Condition from contacts and no-fly zones (fixed dt, like the battery)."""
+        if self.cond is None or not self.cond.ok or not self.pos_initialized:
+            return
+        flying = self.counter >= 120 and not self.block_landed
+        e, n, u = self.current_pos[1], self.current_pos[0], -self.current_pos[2] + HOME_ROOF_M   # height above ground
+        vel = (self.vel[1], self.vel[0], -self.vel[2])
+        events = self.cond.step(e, n, u, vel, self.timer_period, flying)
+        for ev in events:
+            ev.update({"condition_pct": round(self.cond.condition, 2), "pos_enu": [round(e, 1), round(n, 1), round(u, 1)],
+                       "state": self.drone_state.value, "egle_state": self._egle_state()})
+            self._cond_write(ev)
+            if ev["type"] == "impact":
+                self.log_event(f"Impact ({ev['object'].split()[0]}) at {ev['speed_ms']:.0f} m/s: Condition {self.cond.condition:.0f}%")
+            elif ev["type"] == "ground_impact":
+                self.log_event(f"Hard landing: Condition {self.cond.condition:.0f}%")
+            elif ev["type"] == "nofly_enter":
+                self.log_event(f"Entered no-fly zone {ev['zone']} ({ev['name']}).")
+            elif ev["type"] == "nofly_exit":
+                self.log_event(f"Left no-fly zone {ev['zone']}. Condition {self.cond.condition:.0f}%")
+            elif ev["type"] == "destroyed":
+                self._vehicle_destroyed()
+        if self.counter % 20 == 0:          # 1 Hz sample
+            self._cond_write({"type": "sample", "condition_pct": round(self.cond.condition, 2),
+                              "zone": self.cond.in_zone["id"] if self.cond.in_zone else None,
+                              "contacts": sorted(self.cond.contacts)})
+
+    def _vehicle_destroyed(self):
+        """Condition 0 % (G4): the vehicle is wrecked; it comes down where it is and the block ends."""
+        if self.block_ended:
+            return
+        self.send_cmd(21, 0.0)
+        self.get_logger().error("[CONDITION] Condition 0 % → vehicle lost, landing in place")
+        wp = list(self.current_pos); wp[2] = 0.0
+        self._end_block("crash", wp)
+
+    def _battery_depleted(self):
+        """Battery at 0 % (Ben, 23 Oct): land in place, block ends. Becomes a crash
+        with damage once the hazard/damage model (G-series) exists."""
+        if self.block_ended:
+            return
+        self.send_cmd(21, 0.0)   # MAV_CMD_NAV_LAND at the current position
+        self.get_logger().error("[BATT] Battery depleted → LANDING IN PLACE")
+        wp = list(self.current_pos); wp[2] = 0.0
+        self._end_block("battery_depleted", wp)
+
+    def _battery_gate(self):
+        """D3: battery reserve reached -> PX4 return-to-launch and land; block ends.
+        Same in every condition, logged separately from EGLe takeovers."""
+        if self.block_ended:
+            return
+        self.send_cmd(20)   # MAV_CMD_NAV_RETURN_TO_LAUNCH
+        self.get_logger().error(f"[BATT] Reserve reached ({self.batt.pct:.1f}%) → RETURN HOME AND LAND")
+        self._end_block("battery_gate", [0.0, 0.0, 0.0])
+
+    def emergency_return(self):
+        """Operator emergency (gamepad LB+RB): PX4 return-to-launch, which flies
+        home and lands. Terminal for the block, like emergency land."""
+        if self.block_ended:
+            return
+        self.send_cmd(20)   # MAV_CMD_NAV_RETURN_TO_LAUNCH
+        self.get_logger().error("[WPT] 🚨 OPERATOR EMERGENCY → RETURN HOME AND LAND")
+        self._end_block("emergency_return", [0.0, 0.0, 0.0])
+
+    def _egle_state(self) -> str:
+        """E1: participant-facing mode. No timer or countdown to tau.
+        RETURNING is reserved for the battery-gate return (D3, not yet built).
+        LANDED is terminal: emergency land ended the block. After the operator's
+        emergency return (LB+RB), RETURNING shows until the vehicle is down.
+        HOLD appears only in the control condition (tau = None) while the
+        operator is inactive, so it can never cue an upcoming takeover."""
+        if self.block_ended:
+            if self.block_end_reason in RETURN_REASONS and not self.block_landed:
+                return "RETURNING"
+            return "LANDED"
+        if getattr(self, "gate_return", False):
+            return "RETURNING"
+        if self.drone_state != DroneState.MANUAL:
+            return "AUTONOMOUS"
+        if (TAU_S is None and getattr(self, "control_live_time", None) is not None
+                and (time.time() - self.last_key_time) >= SESSION["episode_min_s"]):
+            return "HOLD"
+        return "MANUAL"
+
     def _write_dashboard_state(self):
         e  = time.time() - self.flight_start_time
         m  = int(e // 60); s = int(e % 60)
@@ -374,12 +819,17 @@ class UAVAutonomousNode(Node):
         rn = [s['name'] for s in MAP['sectors'] if s['id'] not in self.visited_sectors]
         state = {
             "flight_time": ft, "timestamp": time.time(),
+            "flight_start_wall": self.flight_start_time, "run_id": getattr(self, "run_id", None),
+            "call_set": CALL_SET_ID, "block_ended": self.block_ended, "block_landed": self.block_landed,
             "drone_state": self.drone_state.value, "llm_running": self.llm_running,
+            "egle_state": self._egle_state(),
             "post_reentry": self.post_signal_loss_reentry,
             "dwell_active": self.dwell_active, "dwell_remaining": round(dr, 1),
             "battery_pct": round(self.battery_pct, 1),
-            "battery_low": self.battery_pct < BATTERY_LOW_THRESH,
-            "battery_crit": self.battery_pct < BATTERY_CRIT_THRESH,
+            "condition_pct": round(self.cond.condition, 1) if self.cond and self.cond.ok else None,
+            "nofly_zone": (self.cond.in_zone["name"] if self.cond and self.cond.ok and self.cond.in_zone else None),
+            "battery_low": self.battery_pct <= self.batt.warn_pct,
+            "battery_crit": self.battery_pct <= (self.batt.reserve_pct or 0.0),
             "ekf_confidence": round(self.ekf_confidence, 2),
             "ekf_ok": self.ekf_confidence >= EKF_CONF_MIN,
             "position": [round(v, 1) for v in self.current_pos],
@@ -391,7 +841,7 @@ class UAVAutonomousNode(Node):
             "current_wp": self.current_wp_name,
             "current_intent": self.current_intent.name if self.current_intent else "NONE",
             "llm_intent_num": self.last_llm_intent_num,
-            "llm_intent_name": self.current_intent.name if self.current_intent else "NONE",
+            "llm_intent_name": Intent(self.last_llm_intent_num).name if self.last_llm_intent_num else "NONE",
             "llm_wp_name": self.last_llm_wp_name,
             "llm_confidence": self.last_llm_confidence,
             "llm_conf_label": cl,
@@ -449,15 +899,9 @@ Consider: Is it safe to resume? Is the drift acceptable? Is this a pattern?
         log("╔══════════════════════════════════════════════════════════╗")
         log("║   UAV AUTONOMOUS SYSTEM — FINAL FIXED VERSION           ║")
         log("║                                                          ║")
-        log("║  FIXES: All sectors visited | Test keys stable          ║")
+        log("║  Input: Xbox controller only. Keyboard: none (Q Q in    ║")
+        log("║  the dashboard stops the session).                      ║")
         log("║                                                          ║")
-        log("║  T = force EKF → 0.2   (LOCKED until you press R)       ║")
-        log("║  Y = force Batt → 10%  (LOCKED until you press R)       ║")
-        log("║  R = reset BOTH to normal                               ║")
-        log("║  Z = simulate signal loss (5s)                          ║")
-        log("║  F = force LLM re-query now                             ║")
-        log("║  1-7 = force specific intent directly                   ║")
-        log("║  H = show dataset stats                                 ║")
         log("╚══════════════════════════════════════════════════════════╝")
 
     def _print_pilot_decision_banner(self, intent, target_name, target_pos,
@@ -507,33 +951,16 @@ Consider: Is it safe to resume? Is the drift acceptable? Is this a pattern?
 
     def pos_cb(self, msg):
         self.current_pos = [msg.x, msg.y, msg.z]
+        self.vel         = [msg.vx, msg.vy, msg.vz]
         if not self.pos_initialized:
             self.target_pos      = self.current_pos.copy()
             self.pos_initialized = True
             self.log_event(f"Position initialized: {[f'{v:.1f}' for v in self.current_pos]}")
 
     def battery_cb(self, msg):
-        # =====================================================
-        #  FIX 2: If battery override active, hold forced value
-        #  and do NOT read from PX4 until override is cleared.
-        # =====================================================
-        if self.battery_override:
-            self.battery_pct = self.battery_override_value
-            return
-
-        prev              = self.battery_pct
-        self.battery_pct  = msg.remaining * 100.0
-        self.battery_volt = msg.voltage_v
-        self.battery_amp  = msg.current_a
-
-        if prev >= BATTERY_LOW_THRESH > self.battery_pct:
-            self.log_event(f"Battery LOW: {self.battery_pct:.1f}%")
-        if prev >= BATTERY_CRIT_THRESH > self.battery_pct:
-            self.log_event(f"Battery CRITICAL: {self.battery_pct:.1f}% — RTB required")
-        if self.battery_pct < BATTERY_CRIT_THRESH and self.counter % 40 == 0:
-            self.get_logger().error(f"[BATT] 🚨 CRITICAL {self.battery_pct:.1f}%")
-        elif self.battery_pct < BATTERY_LOW_THRESH and self.counter % 200 == 0:
-            self.get_logger().warn(f"[BATT] ⚠ LOW {self.battery_pct:.1f}%")
+        # D2: PX4's simulated battery is no longer used (it clamps at 50 %).
+        # battery_pct comes from the battery model in _battery_tick().
+        self.px4_battery_pct = msg.remaining * 100.0
 
     def ekf_cb(self, msg):
         # =====================================================
@@ -560,157 +987,54 @@ Consider: Is it safe to resume? Is the drift acceptable? Is this a pattern?
             self.log_event(f"EKF recovered: {self.ekf_confidence:.2f}")
 
     # =========================================================
-    #  KEYBOARD
+    #  OPERATOR INPUT (controller only)
     # =========================================================
+    # Ben 23 Oct: no keyboard commands in the pilot script. The only keyboard
+    # command left is Q Q in the dashboard (stop session). Flight keys, test
+    # keys (T/Y/R/Z), F, B, H and 1-7 were removed so a participant keypress
+    # can never change the simulation. The report portal (E4) uses its own
+    # keyboard/mouse window and does not count as operator input.
 
-    def on_key_press(self, key):
-        step = 1.0
-        try:
-            moved = False
-            if   key == keyboard.Key.up:    self.target_pos[0] += step; moved = True
-            elif key == keyboard.Key.down:  self.target_pos[0] -= step; moved = True
-            elif key == keyboard.Key.left:  self.target_pos[1] += step; moved = True
-            elif key == keyboard.Key.right: self.target_pos[1] -= step; moved = True
-            elif key.char == 'w': self.target_pos[2] -= step; moved = True
-            elif key.char == 's': self.target_pos[2] += step; moved = True
-
-            elif key.char == 'b':
-                self.get_logger().info(
-                    f"[BATT] {self.battery_pct:.1f}% | {self.battery_volt:.2f}V | {self.battery_amp:.2f}A"
-                )
-                return
-
-            elif key.char == 'h':
-                ds = self.dataset.get_stats()
-                visited   = [s['name'] for s in MAP['sectors'] if s['id'] in self.visited_sectors]
-                remaining = [s['name'] for s in MAP['sectors'] if s['id'] not in self.visited_sectors]
-                self.get_logger().info(
-                    f"[INFO] Dataset decisions={ds['total_decisions']} "
-                    f"fallbacks={ds['fallback_count']} reentries={ds['reentry_count']}"
-                )
-                self.get_logger().info(f"[INFO] Visited={visited}  Remaining={remaining}")
-                return
-
-            elif key.char == 't':
-                # =====================================================
-                #  FIX 2: T = force EKF bad, SET override flag
-                #  Override flag blocks ekf_cb from reverting the value
-                #  Override will be cleared in _llm_worker after LLM responds
-                # =====================================================
-                self.ekf_override       = True
-                self.ekf_override_value = 0.2
-                self.ekf_confidence     = 0.2
-                self.log_event("[TEST] EKF forced → 0.2 (LOCKED — press R to release)")
-                self.get_logger().warn("[TEST] ⚠ EKF override ON → 0.2")
-                self.last_llm_time = 0.0
-                self.drone_state   = DroneState.AUTO_INIT
-                return
-
-            elif key.char == 'y':
-                # =====================================================
-                #  FIX 2: Y = force battery low, SET override flag
-                # =====================================================
-                self.battery_override       = True
-                self.battery_override_value = 10.0
-                self.battery_pct            = 10.0
-                self.log_event("[TEST] Battery forced → 10% (LOCKED — press R to release)")
-                self.get_logger().warn("[TEST] ⚠ Battery override ON → 10%")
-                self.last_llm_time = 0.0
-                self.drone_state   = DroneState.AUTO_INIT
-                return
-
-            elif key.char == 'r':
-                # =====================================================
-                #  FIX 2: R = reset BOTH overrides to normal
-                # =====================================================
-                self.ekf_override     = False
-                self.battery_override = False
-                self.ekf_confidence   = 1.0
-                self.battery_pct      = 100.0
-                self.log_event("[TEST] Reset: EKF → 1.0, Battery → 100% (overrides OFF)")
-                self.get_logger().info("[TEST] ✅ Both overrides cleared — sensors reading normally")
-                self.last_llm_time = 0.0
-                self.drone_state   = DroneState.AUTO_INIT
-                return
-
-            elif key.char == 'f':
-                self.last_llm_time = 0.0
-                self.drone_state   = DroneState.AUTO_INIT
-                self.dwell_active  = False
-                self.log_event("Operator forced LLM re-query.")
-                return
-
-            elif key.char == 'z':
-                def _sim():
-                    self.pre_loss_intent      = self.current_intent
-                    self.pre_loss_wp_name     = self.current_wp_name
-                    self.pre_loss_battery     = self.battery_pct
-                    self.pre_loss_position    = self.current_pos.copy()
-                    self.signal_was_lost      = True
-                    self.signal_lost_time     = time.time()
-                    self.signal_lost_battery  = self.battery_pct
-                    self.signal_lost_position = self.current_pos.copy()
-                    self.signal_loss_count   += 1
-                    self.signal_loss_since_depart = True
-                    self.log_event(f"[TEST] Signal loss #{self.signal_loss_count} simulated (5s)")
-                    time.sleep(5.0)
-                    self.battery_pct             = max(0.0, self.battery_pct - 2.0)
-                    duration                     = time.time() - self.signal_lost_time
-                    self.last_loss_duration      = duration
-                    self.last_loss_battery_cost  = self.signal_lost_battery - self.battery_pct
-                    self.last_loss_drift         = 1.5
-                    self.signal_was_lost         = False
-                    self.post_signal_loss_reentry = True
-                    self.log_event(
-                        f"[TEST] Signal regained. Duration: {duration:.1f}s. "
-                        f"Cost: {self.last_loss_battery_cost:.1f}%"
-                    )
-                    self._print_signal_banner("REGAINED (simulated)",
-                        f"Duration: {duration:.1f}s | Cost: {self.last_loss_battery_cost:.1f}%")
-                    self.last_llm_time = 0.0
-                    self.drone_state   = DroneState.AUTO_INIT
-                threading.Thread(target=_sim, daemon=True).start()
-                return
-
-            elif key.char in '1234567':
-                intent = Intent(int(key.char))
-                self.log_event(f"[TEST] Intent forced → {intent.name}")
-                new_target, wp_name = self._generate_waypoint(intent)
-                self.current_intent  = intent
-                self.target_pos      = new_target
-                self.current_wp_name = wp_name
-                self.drone_state     = DroneState.AUTO_FLYING
-                self.dwell_active    = False
-                self._print_pilot_decision_banner(
-                    intent, wp_name, new_target, 99,
-                    f"Manually forced by operator (key {key.char}).",
-                    "Until next operator input"
-                )
-                return
-
-            if moved:
-                self.last_key_time = time.time()
-                self.loitering = False; self.circle_center = None
-                self.dwell_active = False
-                if self.drone_state != DroneState.MANUAL:
-                    self.log_event(f"Human took control from {self.drone_state.value}. Batt: {self.battery_pct:.1f}%")
-                    self.drone_state    = DroneState.MANUAL
-                    self.current_intent = None
-                    self._print_mode_change("MANUAL", "Human operator took control")
-
-        except AttributeError:
-            pass
+    def operator_input(self, source="controller"):
+        """Operator flight input: take manual control if the agent was flying.
+        Does not move the target (the old fake arrow-key nudged it 1 m)."""
+        if self.block_ended:
+            return
+        self.last_key_time = time.time()
+        self.loitering = False; self.circle_center = None
+        self.dwell_active = False
+        if self.drone_state != DroneState.MANUAL:
+            self.log_event(f"Human took control from {self.drone_state.value} ({source}). Batt: {self.battery_pct:.1f}%")
+            self.drone_state    = DroneState.MANUAL
+            self.current_intent = None
+            self._print_mode_change("MANUAL", "Human operator took control")
 
     # =========================================================
     #  COMM LOSS / WAYPOINT
     # =========================================================
 
-    def check_comm_loss(self) -> bool:
-        score = 0
-        if (time.time() - self.last_key_time) > KEYBOARD_TIMEOUT: score += 1
-        if self.battery_pct < BATTERY_LOW_THRESH:                  score += 1
-        if self.ekf_confidence < EKF_CONF_MIN:                     score += 1
-        return score >= COMMLOSS_SCORE_THRESH
+    def _control_live(self) -> bool:
+        """Operator control starts once the vehicle is armed and above
+        CONTROL_LIVE_ALT_M after START. The inaction timer (tau) and episode
+        logging start then, so the agent cannot take over during arming and
+        take-off."""
+        if getattr(self, "control_live_time", None) is not None:
+            return True
+        if self.counter >= 120 and self.pos_initialized and -self.current_pos[2] >= CONTROL_LIVE_ALT_M:
+            self.control_live_time = time.time()
+            self.last_key_time     = self.control_live_time
+            self.log_event(f"Control live (airborne {-self.current_pos[2]:.1f} m). Inaction timer started.")
+            return True
+        return False
+
+    def check_operator_inactive(self) -> bool:
+        # A1/A5/B3: takeover depends only on operator inaction. Battery and
+        # EKF no longer trigger it. Control condition (tau = None): never.
+        if not self._control_live():
+            return False
+        if TAU_S is None:
+            return False
+        return (time.time() - self.last_key_time) > TAU_S
 
     def check_waypoint_reached(self) -> bool:
         if not self.pos_initialized: return False
@@ -719,6 +1043,8 @@ Consider: Is it safe to resume? Is the drift acceptable? Is this a pattern?
         return math.sqrt(dx*dx + dy*dy) < WAYPOINT_REACH_DIST
 
     def _safe_fallback_intent(self) -> Intent:
+        if self.planner is not None:                  # call set: gate, else follow the plan
+            return self._gate_intent() or Intent.SEARCH_NEXT_PRIORITY
         if self.battery_pct < BATTERY_CRIT_THRESH: return Intent.ABORT_AND_SAFE
         if self.ekf_confidence < EKF_CONF_MIN:      return Intent.HOLD_SAFE
         if self.battery_pct < BATTERY_LOW_THRESH:   return Intent.RETURN_TO_BASE
@@ -727,6 +1053,20 @@ Consider: Is it safe to resume? Is the drift acceptable? Is this a pattern?
     # =========================================================
     #  LLM
     # =========================================================
+
+    def _ollama_model_digest(self):
+        """Digest of the local Ollama model named LLM_MODEL, or None if unavailable."""
+        try:
+            with urllib.request.urlopen(f"{LLM_URL}/api/tags", timeout=5) as resp:
+                models = json.loads(resp.read().decode("utf-8")).get("models", [])
+            want = LLM_MODEL if ":" in LLM_MODEL else LLM_MODEL + ":latest"
+            for m in models:
+                if m.get("name") in (LLM_MODEL, want) or m.get("model") in (LLM_MODEL, want):
+                    return m.get("digest")
+            self.get_logger().warn(f"[LLM] model {LLM_MODEL} not found in Ollama /api/tags")
+        except Exception as e:
+            self.get_logger().warn(f"[LLM] could not read model digest: {e}")
+        return None
 
     def trigger_llm(self):
         if self.llm_running: return
@@ -737,8 +1077,9 @@ Consider: Is it safe to resume? Is the drift acceptable? Is this a pattern?
         #  LLM entirely and apply deterministic safe action.
         #  This prevents the LLM from overriding safety rules.
         # =====================================================
-        if self.battery_pct < BATTERY_CRIT_THRESH:
-            intent = Intent.ABORT_AND_SAFE if self.battery_pct < 5.0 else Intent.RETURN_TO_BASE
+        gate_intent = self._gate_intent()
+        if gate_intent is not None:
+            intent = gate_intent
             self.get_logger().error(
                 f"[SAFETY] Battery CRITICAL ({self.battery_pct:.1f}%) — "
                 f"forcing {intent.name}, skipping LLM"
@@ -753,8 +1094,8 @@ Consider: Is it safe to resume? Is the drift acceptable? Is this a pattern?
             self.dwell_active    = False
             self._print_pilot_decision_banner(
                 intent, wp_name, new_target, 99,
-                f"Safety gate activated — battery critical at {self.battery_pct:.1f}%. "
-                f"LLM bypassed. Returning home immediately.",
+                f"Safety gate activated — battery {self.battery_pct:.1f}% is at the cost of "
+                f"flying home. LLM bypassed: {intent.name}.",
                 "Land safely", fallback_used=True
             )
             return
@@ -788,6 +1129,7 @@ Consider: Is it safe to resume? Is the drift acceptable? Is this a pattern?
         threading.Thread(target=self._llm_worker, daemon=True).start()
 
     def _llm_worker(self):
+        self._last_llm_meta = None
         was_reentry   = self.post_signal_loss_reentry
         fallback_used = False
 
@@ -825,28 +1167,35 @@ Consider: Is it safe to resume? Is the drift acceptable? Is this a pattern?
                 tag = " [RE-ENTRY]" if was_reentry else ""
                 self.log_event(f"LLM{tag} ({confidence}%): {intent.name}. {reasoning[:80]}")
 
-            self.last_llm_reasoning  = reasoning
-            self.last_llm_confidence = confidence
-            self.last_llm_checkpoint = checkpoint
-            self.last_llm_intent_num = intent.value
-            self.post_signal_loss_reentry = False
+            # A6: if the operator took control while the LLM was thinking, the
+            # result is stale. Log it, but do not move the vehicle or change state.
+            applied = self.drone_state != DroneState.MANUAL and not self.block_ended
+            if not applied:
+                new_target, wp_name = None, "None (discarded: operator in control)"
+                self.log_event(f"Agent decision discarded: operator in control ({intent.name}).")
+            else:
+                self.last_llm_reasoning  = reasoning
+                self.last_llm_confidence = confidence
+                self.last_llm_checkpoint = checkpoint
+                self.last_llm_intent_num = intent.value
+                self.post_signal_loss_reentry = False
 
-            # Overrides are NOT cleared here.
-            # They stay locked until operator presses R.
-            # This keeps the forced value stable across multiple LLM queries.
+                # Overrides are NOT cleared here.
+                # They stay locked until operator presses R.
+                # This keeps the forced value stable across multiple LLM queries.
 
-            new_target, wp_name  = self._generate_waypoint(intent)
-            self.last_llm_wp_name = wp_name
-            self.current_intent   = intent
-            self.target_pos       = new_target
-            self.current_wp_name  = wp_name
-            self.last_llm_time    = time.time()
-            self.dwell_active     = False
-            self.dwell_logged     = False
-            self.drone_state      = DroneState.AUTO_FLYING
+                new_target, wp_name  = self._generate_waypoint(intent)
+                self.last_llm_wp_name = wp_name
+                self.current_intent   = intent
+                self.target_pos       = new_target
+                self.current_wp_name  = wp_name
+                self.last_llm_time    = time.time()
+                self.dwell_active     = False
+                self.dwell_logged     = False
+                self.drone_state      = DroneState.AUTO_FLYING
 
-            self.waypoint_depart_time     = time.time()
-            self.signal_loss_since_depart = False
+                self.waypoint_depart_time     = time.time()
+                self.signal_loss_since_depart = False
 
             # Record to dataset
             rid = self.dataset.record_decision(
@@ -874,31 +1223,39 @@ Consider: Is it safe to resume? Is the drift acceptable? Is this a pattern?
                 response_time_seconds  = response_time,
                 fallback_used          = fallback_used,
                 was_reentry            = was_reentry,
+                llm_meta               = self._last_llm_meta,
+                applied                = applied,
             )
-            self.current_record_id = rid
+            if applied:
+                self.current_record_id = rid
             self.get_logger().info(
                 f"[DATASET] Decision #{self.dataset.decision_count} recorded "
                 f"(conf={confidence}% fallback={fallback_used})"
             )
 
-            self._print_pilot_decision_banner(
-                intent, wp_name, new_target,
-                confidence, reasoning, checkpoint,
-                fallback_used, was_reentry
-            )
+            if applied:
+                self._print_pilot_decision_banner(
+                    intent, wp_name, new_target,
+                    confidence, reasoning, checkpoint,
+                    fallback_used, was_reentry
+                )
 
         except Exception as e:
             response_time = time.time() - self.llm_query_start_time
             self.get_logger().warn(f"[LLM] Failed: {e} → HOLD_SAFE")
             self.log_event(f"LLM failed: {e} — HOLD_SAFE")
-            self.post_signal_loss_reentry = False
             # Overrides NOT cleared on failure — operator must press R
-            intent = Intent.HOLD_SAFE
-            new_target, wp_name  = self._generate_waypoint(intent)
-            self.current_intent  = intent
-            self.target_pos      = new_target
-            self.current_wp_name = wp_name
-            self.drone_state     = DroneState.AUTO_FLYING
+            intent  = Intent.HOLD_SAFE
+            applied = self.drone_state != DroneState.MANUAL
+            if applied:
+                self.post_signal_loss_reentry = False
+                new_target, wp_name  = self._generate_waypoint(intent)
+                self.current_intent  = intent
+                self.target_pos      = new_target
+                self.current_wp_name = wp_name
+                self.drone_state     = DroneState.AUTO_FLYING
+            else:
+                wp_name = "None (discarded: operator in control)"
             rid = self.dataset.record_decision(
                 flight_time_str=self._flight_time_str(),
                 battery_pct=snap_batt, ekf_confidence=snap_ekf,
@@ -912,8 +1269,10 @@ Consider: Is it safe to resume? Is the drift acceptable? Is this a pattern?
                 reasoning=f"LLM failed: {e}. HOLD_SAFE fallback.",
                 confidence=99, checkpoint="Until LLM recovers",
                 response_time_seconds=response_time, fallback_used=True, was_reentry=was_reentry,
+                llm_meta=self._last_llm_meta, applied=applied,
             )
-            self.current_record_id = rid
+            if applied:
+                self.current_record_id = rid
 
         finally:
             self.llm_running = False
@@ -993,22 +1352,50 @@ IMPORTANT RULES:
 
 Think like an experienced pilot. Respond ONLY with valid JSON:
 {{"intent":<1-7>,"reasoning":"<one clear paragraph>","confidence":<0-100>,"next_checkpoint":"<when to reconsider>"}}"""
+        if self.planner is not None:              # F2: flood-call prompt (flood_prompt.py)
+            prompt = self._flood_prompt()
 
-        result = subprocess.run(
-            ["ollama", "run", "llama3"],
-            input=prompt, text=True, capture_output=True, timeout=60
+        self._last_llm_meta = {
+            "model": LLM_MODEL,
+            "model_digest": self.llm_model_digest,
+            "options": dict(LLM_OPTIONS),
+            "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+            "prompt_code_sha256": self.prompt_code_sha256,
+            "agent_plan": self.agent_plan if self.planner is not None else None,
+        }
+        payload = json.dumps({
+            "model": LLM_MODEL,
+            "prompt": prompt,
+            "stream": False,
+            "options": LLM_OPTIONS,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            f"{LLM_URL}/api/generate",
+            data=payload,
+            headers={"Content-Type": "application/json"}
         )
-        response   = result.stdout.strip()
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            api_result = json.loads(resp.read().decode("utf-8"))
+        self._last_llm_meta.update({
+            "response_model": api_result.get("model"),
+            "prompt_eval_count": api_result.get("prompt_eval_count"),
+            "eval_count": api_result.get("eval_count"),
+            "total_duration_s": (api_result.get("total_duration") or 0) / 1e9,
+        })
+        response   = api_result.get("response", "").strip()
         json_match = re.search(r'\{[^{}]*"intent"[^{}]*\}', response, re.DOTALL)
         if not json_match:
             raise ValueError(f"No JSON in response: '{response[:150]}'")
-        parsed     = json.loads(json_match.group())
+        parsed     = json.loads(json_match.group(), strict=False)
         intent_num = int(parsed.get("intent", 1))
         reasoning  = str(parsed.get("reasoning", "No reasoning provided."))
         confidence = max(0, min(100, int(parsed.get("confidence", 50))))
         checkpoint = str(parsed.get("next_checkpoint", "Next LLM cycle"))
         if intent_num not in range(1, 8):
             raise ValueError(f"Intent {intent_num} out of range")
+        if self.planner is not None and intent_num in flood_prompt.NOT_OFFERED:
+            self.log_event(f"LLM chose intent {intent_num} (not offered) -> {flood_prompt.NOT_OFFERED[intent_num]}")
+            intent_num = flood_prompt.NOT_OFFERED[intent_num]
         self.get_logger().info(f"[LLM] intent={intent_num} conf={confidence}%")
         return Intent(intent_num), reasoning, confidence, checkpoint
 
@@ -1020,7 +1407,40 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
         def dist3d(pos):
             return math.sqrt(sum((a-b)**2 for a, b in zip(pos, self.current_pos)))
         def safe_alt(z):
+            if self.planner is not None:   # call set: keep call altitude (low flight hits buildings)
+                return z
             return max(z, -5.0) if self.battery_pct < BATTERY_CRIT_THRESH else z
+
+        def by_name(name):
+            return next((x for x in MAP['sectors'] if x['name'] == name), None)
+
+        if self.planner is not None and intent == Intent.CONTINUE_ASSIGNED_TASK:
+            cur = next((x for x in MAP['sectors'] if x['id'] == self.assigned_sector), None)
+            if cur is None or cur['name'] in self.reported_calls or cur['name'] in self.held_out:
+                intent = Intent.SEARCH_NEXT_PRIORITY
+        if self.planner is not None and intent == Intent.SEARCH_NEXT_PRIORITY:
+            self.loitering = False
+            plan = self._make_plan()
+            if not plan["order"]:
+                self.log_event("Route plan: no call can be served -> home.")
+                return self._generate_waypoint(Intent.RETURN_TO_BASE)
+            nxt = by_name(plan["order"][0])
+            self.assigned_sector = nxt['id']
+            self.log_event(f"Route plan: {' -> '.join(plan['order'])} -> home "
+                           f"(~{plan['time_s']:.0f} s, ~{plan['battery_end_pct']:.0f}% at home).")
+            wp = nxt['pos'].copy()
+            return wp, nxt['name']
+        if self.planner is not None and intent == Intent.INSPECT_TARGET_REPORT:
+            self.loitering = False
+            here = (self.current_pos[1], self.current_pos[0])
+            open_s = [x for x in MAP['sectors'] if x['name'] not in self.reported_calls and x['name'] not in self.held_out]
+            if not open_s:
+                return self._generate_waypoint(Intent.RETURN_TO_BASE)
+            nxt = min(open_s, key=lambda x: (self.planner.length(here, (x['pos'][1], x['pos'][0])), x['priority']))
+            self.assigned_sector = nxt['id']
+            return nxt['pos'].copy(), nxt['name']
+        if self.planner is not None and intent == Intent.COMMS_REACQUIRE:
+            intent = Intent.HOLD_SAFE
 
         if intent == Intent.HOLD_SAFE:
             # FIX 3: HOLD_SAFE always uses loiter circle, never just hover
@@ -1070,8 +1490,8 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
             wp = next_s['pos'].copy(); wp[2] = safe_alt(wp[2])
             self.get_logger().info(
                 f"[MISSION] Next sector: {next_s['name']} | "
-                f"Visited: {len(self.visited_sectors)}/5 | "
-                f"Remaining: {5 - len(self.visited_sectors)}"
+                f"Visited: {len(self.visited_sectors)}/{len(MAP['sectors'])} | "
+                f"Remaining: {len(MAP['sectors']) - len(self.visited_sectors)}"
             )
             return wp, next_s['name']
 
@@ -1101,6 +1521,7 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
             self.get_logger().error("[WPT] 🚨 ABORT → EMERGENCY LAND NOW")
             self.send_cmd(21, 0.0)
             wp = self.current_pos.copy(); wp[2] = 0.0
+            self._end_block("emergency_land", wp)
             return wp, "GROUND (EMERGENCY LAND)"
 
         return self.current_pos.copy(), "UNKNOWN"
@@ -1108,6 +1529,92 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
     # =========================================================
     #  LOITER UPDATE
     # =========================================================
+
+    def _setpoint_pos_vel(self):
+        """Position and velocity feed-forward sent to PX4 this cycle.
+        MANUAL: the operator's target, plus the gamepad stick velocity if any.
+        Agent: a carrot moved toward target_pos at AGENT_CRUISE_MS (D4), so the
+        agent flies at a fixed, model-derived speed instead of PX4's cap.
+        target_pos itself stays the agent's goal, so arrival logic is unchanged."""
+        tgt = [float(v) for v in self.target_pos]
+        if self.drone_state == DroneState.MANUAL:
+            self._carrot = None
+            self._via_goal = None                 # re-plan detours from wherever control is handed back
+            mv = getattr(self, "manual_vel", None)
+            return tgt, ([float(v) for v in mv] if mv is not None else [0.0, 0.0, 0.0])
+        dt = self.timer_period
+        if getattr(self, "_carrot", None) is None:
+            self._carrot   = [float(self.current_pos[0]), float(self.current_pos[1])]
+            self._carrot_v = 0.0
+        # G3 (simple): detour via-points around no-fly zones, recomputed when the goal changes
+        goal_key = (round(tgt[0], 1), round(tgt[1], 1))
+        if getattr(self, "_via_goal", None) != goal_key:
+            self._via_goal = goal_key
+            self._via = []
+            if self.cond is not None and self.cond.ok:
+                via_en = self.cond.detour((self._carrot[1], self._carrot[0]), (tgt[1], tgt[0]))
+                self._via = [[n, e] for e, n in via_en]           # NED x = north, y = east
+                if self._via:
+                    self.log_event(f"Agent route around no-fly zone(s): {len(self._via)} via-points.")
+        final_xy = (tgt[0], tgt[1])
+        if self._via:
+            tgt = [self._via[0][0], self._via[0][1], tgt[2]]
+        dx, dy = tgt[0] - self._carrot[0], tgt[1] - self._carrot[1]
+        d      = math.hypot(dx, dy)
+        # remaining path length (for the stopping profile): to this point, then via-points, then the goal
+        rest = 0.0
+        if self._via:
+            chain = self._via + [list(final_xy)]
+            rest = sum(math.hypot(chain[i + 1][0] - chain[i][0], chain[i + 1][1] - chain[i][1])
+                       for i in range(len(chain) - 1))
+        d_goal = math.hypot(final_xy[0] - self._carrot[0], final_xy[1] - self._carrot[1])
+        if d > 3.0:
+            # Face the direction of travel (forward camera looks where the agent goes)
+            self._agent_yaw_goal = math.atan2(dy, dx)     # PX4 yaw: 0 = north, + = east
+        # Transit altitude: climb before moving, cruise above buildings/trees,
+        # descend vertically once over the goal (decisions: raise cruise altitude).
+        transit_z = -MAP["transit_alt_m"]
+        if max(d, d_goal) > max(AGENT_CRUISE_MS * dt, 0.05) and transit_z < tgt[2]:
+            climbing = self.current_pos[2] > transit_z + 3.0    # NED: more than 3 m below transit
+            if climbing:
+                self._carrot_v = 0.0
+                return [self._carrot[0], self._carrot[1], transit_z], [0.0, 0.0, 0.0]
+            tgt = [tgt[0], tgt[1], transit_z]
+        # Accelerate to cruise, hold, then decelerate so it stops at the goal.
+        v_stop = math.sqrt(2.0 * AGENT_ACCEL_MS2 * (d + rest))
+        v      = min(AGENT_CRUISE_MS, self._carrot_v + AGENT_ACCEL_MS2 * dt, v_stop)
+        self._carrot_v = v
+        step   = v * dt
+        if d <= max(step, 0.05):
+            self._carrot   = [tgt[0], tgt[1]]
+            if self._via:                                  # via-point reached: keep speed, next leg
+                self._via.pop(0)
+                return [tgt[0], tgt[1], tgt[2]], [0.0, 0.0, 0.0]
+            self._carrot_v = 0.0
+            return tgt, [0.0, 0.0, 0.0]
+        ux, uy = dx / d, dy / d
+        self._carrot = [self._carrot[0] + ux * step, self._carrot[1] + uy * step]
+        return ([self._carrot[0], self._carrot[1], tgt[2]], [ux * v, uy * v, 0.0])
+
+    def _yaw_sp(self):
+        """Heading sent to PX4. MANUAL: the operator's. Loiter: circle tangent.
+        Agent: toward its travel direction, rate-limited to AGENT_YAW_RATE; held
+        on arrival. Starts from the last heading sent, so nothing snaps."""
+        last = getattr(self, "last_sp_yaw", 0.0)
+        if self.drone_state == DroneState.MANUAL and getattr(self, "manual_yaw", None) is not None:
+            return self.manual_yaw
+        if self.drone_state == DroneState.MANUAL:
+            return last
+        if self.loitering:
+            goal = self.circle_angle + math.pi / 2.0
+        else:
+            goal = getattr(self, "_agent_yaw_goal", None)
+            if goal is None:
+                return last
+        err  = math.atan2(math.sin(goal - last), math.cos(goal - last))
+        step = math.radians(AGENT_YAW_RATE) * self.timer_period
+        yaw  = goal if abs(err) <= step else last + math.copysign(step, err)
+        return math.atan2(math.sin(yaw), math.cos(yaw))
 
     def update_loiter(self):
         if not self.loitering or self.circle_center is None: return
@@ -1122,6 +1629,10 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
     # =========================================================
 
     def loop(self):
+        if getattr(self, 'nofly', None) is not None and getattr(self, 'pos_initialized', False):
+            self.nofly.update(self.current_pos, self.drone_state,
+                              time.time() - self.flight_start_time,
+                              getattr(self, 'current_wp_name', None))
         timestamp = int(self.get_clock().now().nanoseconds / 1000)
         now       = time.time()
 
@@ -1131,10 +1642,39 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
         offboard.position  = True
         self.offboard_pub.publish(offboard)
 
-        comm_loss = self.check_comm_loss()
+        self._battery_tick()
+        self._condition_tick()
+        self._call_tick()
+
+        if self.block_ended:
+            # Terminal: hold the ground setpoint, keep the dashboard updated,
+            # no takeover logic, no LLM queries, no episode logging.
+            sp           = TrajectorySetpoint()
+            sp.timestamp = timestamp
+            sp.position  = [float(v) for v in self.target_pos]
+            sp.yaw       = getattr(self, "last_sp_yaw", 0.0)   # keep heading while landing
+            self.traj_pub.publish(sp)
+            if not self.block_landed and self.pos_initialized:
+                near_home = math.hypot(self.current_pos[0], self.current_pos[1]) < 5.0
+                on_ground = self.current_pos[2] > -0.5
+                if on_ground and (near_home or self.block_end_reason not in RETURN_REASONS):
+                    self.block_landed = True
+                    self.log_event("Landed.")
+            if self.counter % 10 == 0:
+                self._write_dashboard_state()
+            self.counter += 1
+            return
+
+        comm_loss = self.check_operator_inactive()
+        if self._control_live():
+            self.inaction.update(now, self.last_key_time, self.drone_state.value)
 
         # ---- Signal loss / regain detection ----
         if comm_loss and not self.signal_was_lost:
+            self.inaction.mark_takeover(now)
+            player = play_takeover_tone()
+            self.log_event(f"Takeover tone {'played (' + player + ')' if player else 'NOT played'} at "
+                           f"{now - self.flight_start_time:.2f} s.")
             self.signal_was_lost      = True
             self.signal_lost_time     = now
             self.signal_lost_battery  = self.battery_pct
@@ -1146,11 +1686,11 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
             self.signal_loss_count   += 1
             self.signal_loss_since_depart = True
             self.log_event(
-                f"Signal/comm loss #{self.signal_loss_count}. "
+                f"Agent takeover #{self.signal_loss_count}. "
                 f"Battery: {self.battery_pct:.1f}%. Was heading: {self.pre_loss_wp_name}"
             )
             self._print_signal_banner(
-                "LOST",
+                "AGENT TAKEOVER",
                 f"Loss #{self.signal_loss_count} | Batt: {self.battery_pct:.1f}% | Was: {self.pre_loss_wp_name}"
             )
 
@@ -1167,15 +1707,28 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
             self.signal_was_lost         = False
             self.post_signal_loss_reentry = True
             self.log_event(
-                f"Signal regained. Duration: {duration:.1f}s. "
-                f"Cost: {self.last_loss_battery_cost:.1f}%. Drift: {self.last_loss_drift:.1f}m"
+                f"Control returned to operator. Agent time: {duration:.1f}s. "
+                f"Battery cost: {self.last_loss_battery_cost:.1f}%. Drift: {self.last_loss_drift:.1f}m"
             )
             self._print_signal_banner(
-                "REGAINED",
+                "CONTROL RETURNED",
                 f"Duration: {duration:.1f}s | Cost: {self.last_loss_battery_cost:.1f}% | Drift: {self.last_loss_drift:.1f}m"
             )
-            self.last_llm_time = 0.0
-            self.drone_state   = DroneState.AUTO_INIT
+            # A6 handback: operator input returns control immediately. Previously
+            # this set AUTO_INIT, which left the state non-MANUAL while the
+            # operator flew with the gamepad (only a burst's first sample calls
+            # on_key_press), so manual yaw was ignored and logs showed AUTO_INIT.
+            # post_signal_loss_reentry stays True so the next takeover prompt
+            # still includes this episode (EGLe-I mission memory).
+            self.last_llm_time  = 0.0
+            self.drone_state    = DroneState.MANUAL
+            self.loitering      = False
+            self.current_intent = None
+            self.dwell_active   = False
+            # Hold at the current position on handback. Without this, an input
+            # that does not move the target (e.g. a gamepad button) left the
+            # vehicle flying on to the agent's waypoint while showing MANUAL.
+            self.target_pos     = list(self.current_pos)
 
         # ---- State machine ----
         if not comm_loss:
@@ -1188,15 +1741,17 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
             if self.drone_state == DroneState.MANUAL:
                 self.drone_state   = DroneState.AUTO_INIT
                 self.last_llm_time = 0.0
-                elapsed_no_input   = now - self.last_key_time
+                # No idle duration in these messages: the event log is shown on
+                # the dashboard and would reveal tau (A3).
                 self.log_event(
-                    f"Switched to AUTONOMOUS. No input: {elapsed_no_input:.0f}s. "
+                    f"Switched to AUTONOMOUS (operator inactive). "
                     f"Battery: {self.battery_pct:.1f}%. EKF: {self.ekf_confidence:.2f}"
                 )
-                self._print_mode_change("AUTONOMOUS", f"No input for {elapsed_no_input:.0f}s")
+                self._print_mode_change("AUTONOMOUS", "Operator inactive")
 
             if self.drone_state == DroneState.AUTO_INIT:
-                if not self.llm_running:
+                held = self._hold_for_open_report(now)
+                if not held and not self.llm_running:
                     self.trigger_llm()
 
             elif self.drone_state == DroneState.AUTO_FLYING:
@@ -1214,11 +1769,11 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
                         visited_count = len(self.visited_sectors)
                         self.log_event(
                             f"Arrived and marked {self.current_wp_name} as visited. "
-                            f"({visited_count}/5 sectors done)"
+                            f"({visited_count}/{len(MAP['sectors'])} sectors done)"
                         )
                         self.get_logger().info(
                             f"[MISSION] ✅ {self.current_wp_name} visited "
-                            f"({visited_count}/5) | "
+                            f"({visited_count}/{len(MAP['sectors'])}) | "
                             f"Remaining: {[s['name'] for s in MAP['sectors'] if s['id'] not in self.visited_sectors]}"
                         )
                     # =====================================================
@@ -1261,7 +1816,7 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
 
             elif self.drone_state == DroneState.AUTO_DWELLING:
                 elapsed_dwell = now - self.dwell_start
-                remaining     = DWELL_TIME - elapsed_dwell
+                remaining     = self._dwell_remaining(elapsed_dwell)
                 self.dwell_remaining = max(0.0, remaining)
 
                 if int(elapsed_dwell) % 5 == 0 and not self.dwell_logged:
@@ -1292,8 +1847,11 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
         # ---- Send trajectory setpoint ----
         sp           = TrajectorySetpoint()
         sp.timestamp = timestamp
-        sp.position  = [float(v) for v in self.target_pos]
-        sp.yaw       = (self.circle_angle + math.pi / 2.0 if self.loitering else 0.0)
+        pos, vel     = self._setpoint_pos_vel()
+        sp.position  = pos
+        sp.velocity  = vel
+        sp.yaw       = self._yaw_sp()
+        self.last_sp_yaw = sp.yaw
         self.traj_pub.publish(sp)
 
         # ---- Arm sequence ----
@@ -1347,8 +1905,24 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
 # ============================================================
 #  ENTRY POINT
 # ============================================================
+def wait_for_start():
+    """The pilot script is started before START so everything is loaded. It
+    waits here until start_gate.py (Start on the controller) creates
+    START_SIGNAL_FILE. No keyboard start (Ben, 23 Oct). Researcher fallback
+    without the launcher: touch the file from a terminal."""
+    print(f"[SYS] Loaded. Waiting for START on the controller "
+          f"(manual runs: touch {START_SIGNAL_FILE})", flush=True)
+    while not os.path.exists(START_SIGNAL_FILE):
+        time.sleep(0.1)
+    print("[SYS] START", flush=True)
+
+
 def main():
     rclpy.init()
+    try:
+        wait_for_start()
+    except KeyboardInterrupt:
+        os._exit(0)          # stopped before START: nothing to close
     node = UAVAutonomousNode()
     try:
         rclpy.spin(node)
@@ -1360,8 +1934,20 @@ def main():
             f"Fallbacks={ds['fallback_count']} File={ds['filepath']}"
         )
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        node.inaction.close(time.time(), node.drone_state.value, "shutdown")
+        try:
+            node.destroy_node()
+            if rclpy.ok():
+                rclpy.shutdown()
+        except Exception as e:
+            print(f"[SYS] shutdown: {e}")
+        # Every log is written with open/append/close, so nothing is pending here.
+        # Exit without running C++ destructors: background threads (gamepad,
+        # keyboard listener, QGC battery sync) are still alive and tearing the
+        # ROS context down under them aborted the process (SIGABRT, 23 Oct).
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)
 
 
 if __name__ == '__main__':

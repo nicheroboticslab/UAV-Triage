@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EGLe Operator Station</title>
+<style>
+  :root {
+    --bg: #101317; --panel: #181c22; --panel2: #1f242c; --line: #2c333d;
+    --text: #e6e8eb; --dim: #9aa3ad; --accent: #4fa3ff; --sel: #2f6fb8;
+    --manual: #50dc64; --auto: #3cc8ff; --ret: #ffc83c; --hold: #dc78ff; --landed: #c8c8c8;
+    --warn: #ffc83c; --bad: #ff5a50; --ok: #7bd88f;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 18px/1.35 "DejaVu Sans", "Segoe UI", system-ui, sans-serif; }
+  body { display: flex; flex-direction: column; overflow: hidden; }
+  /* nothing in this page animates or blinks (E7) */
+  *, *::before, *::after { transition: none !important; animation: none !important; }
+
+  #status { display: flex; align-items: center; gap: 28px; padding: 10px 18px; background: #0a0c10;
+    border-bottom: 1px solid var(--line); min-height: 60px; flex-wrap: wrap; }
+  #state { display: flex; align-items: center; gap: 12px; font-weight: 700; font-size: 26px; }
+  #state .bar { width: 10px; height: 34px; border-radius: 2px; }
+  #intent { font-size: 20px; color: var(--dim); }
+  #status .sp { flex: 1; }
+  .meter { font-size: 22px; font-weight: 700; }
+  .meter.warn { color: var(--warn); } .meter.bad { color: var(--bad); }
+
+  main { flex: 1; display: grid; grid-template-columns: minmax(300px, 1.05fr) minmax(380px, 1.3fr) minmax(300px, 1fr);
+    gap: 14px; padding: 14px; min-height: 0; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px;
+    overflow-y: auto; min-height: 0; }
+  h2 { margin: 0 0 10px; font-size: 17px; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); }
+
+  .call { border: 1px solid var(--line); border-radius: 6px; padding: 9px 12px; margin-bottom: 9px; background: var(--panel2); }
+  .call.active { border-color: var(--accent); box-shadow: inset 4px 0 0 var(--accent); }
+  .call .top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .call .id { font-weight: 700; font-size: 21px; }
+  .call .dist { color: var(--dim); font-variant-numeric: tabular-nums; }
+  .call .txt { margin-top: 4px; }
+  .call .rep { margin-top: 5px; font-size: 15px; color: var(--dim); }
+  .call .rep.done { color: var(--ok); }
+
+  #form .who { font-size: 22px; font-weight: 700; margin-bottom: 2px; }
+  #form .calltext { color: var(--dim); margin-bottom: 12px; }
+  .field { margin-bottom: 14px; }
+  .field .lab { font-weight: 700; margin-bottom: 6px; }
+  .opts { display: flex; flex-wrap: wrap; gap: 8px; }
+  button { font: inherit; color: var(--text); background: #2a3039; border: 1px solid #3a424e; border-radius: 6px;
+    padding: 9px 14px; cursor: pointer; min-width: 56px; }
+  button:hover { background: #333a45; }
+  button.sel { background: var(--sel); border-color: #5b9be0; color: #fff; }
+  button:disabled { opacity: .35; cursor: default; }
+  .opt small { display: block; font-size: 13px; color: #c3cad3; font-weight: 400; }
+  button.sel small { color: #e8f0fb; }
+  .actions { display: flex; gap: 10px; margin-top: 6px; }
+  .primary { background: #2b6b3d; border-color: #3f8f55; font-weight: 700; padding: 11px 22px; }
+  .primary:hover { background: #33804a; }
+  .msg { margin-top: 10px; min-height: 24px; color: var(--dim); }
+  .msg.err { color: var(--bad); }
+  .empty { color: var(--dim); font-size: 20px; margin-top: 30px; text-align: center; }
+
+  .task { border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; margin-bottom: 10px; background: var(--panel2); }
+  .task .tt { margin-bottom: 8px; }
+  .task .exp { font-size: 14px; color: var(--dim); margin-top: 6px; }
+  .task input[type=number] { font: inherit; width: 100px; padding: 7px 8px; background: #0f1216; color: var(--text);
+    border: 1px solid #3a424e; border-radius: 6px; }
+  .task .nf { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 8px; }
+  .task .nf label { display: flex; flex-direction: column; gap: 4px; font-size: 15px; color: var(--dim); }
+
+  #overlay { position: fixed; inset: 0; background: #0c0e12; display: none; align-items: center; justify-content: center;
+    flex-direction: column; gap: 20px; font-size: 40px; font-weight: 700; text-align: center; }
+  #overlay .sub { font-size: 28px; font-weight: 400; color: #cfd3d8; }
+</style>
+</head>
+<body>
+<div id="status">
+  <div id="state"><span class="bar"></span><span class="txt">—</span></div>
+  <div id="intent"></div>
+  <div class="sp"></div>
+  <div id="batt" class="meter"></div>
+  <div id="cond" class="meter"></div>
+  <div id="ftime" class="meter"></div>
+</div>
+<main>
+  <section><h2>Calls</h2><div id="calls"></div></section>
+  <section id="form"><h2>Report</h2><div id="formbody"></div></section>
+  <section><h2>Requests</h2><div id="tasks"></div></section>
+</main>
+<div id="overlay"><div id="ov1"></div><div class="sub" id="ov2"></div></div>
+
+<script>
+"use strict";
+const STATE_COL = {MANUAL: "var(--manual)", AUTONOMOUS: "var(--auto)", RETURNING: "var(--ret)", HOLD: "var(--hold)", LANDED: "var(--landed)"};
+const PRIO = {P1: "Critical", P2: "Urgent", P3: "Non-urgent", P4: "No action"};
+const DEPTH = {None: "no water", Low: "ankle to shin", Medium: "waist", Deep: "neck"};
+const WORST = {mobile: ["Mobile", "standing, walking, waving"], immobile_responsive: ["Immobile, responsive", "sitting or lying, arms moving"],
+               unresponsive: ["Unresponsive", "lying still"]};
+let V = null;                 // last view from the server
+let form = {call: null, vals: {}, dirty: false};
+let msg = {text: "", err: false};
+const taskEls = {};           // task id -> {el, vals, opened}
+
+function post(path, body) {
+  return fetch("/api/" + path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)})
+    .then(r => r.json()).catch(() => ({ok: false, error: "Portal not reachable"}));
+}
+function el(tag, cls, html) { const e = document.createElement(tag); if (cls) e.className = cls; if (html !== undefined) e.innerHTML = html; return e; }
+function esc(s) { return String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c])); }
+
+// ---------------------------------------------------------------- status strip
+function renderStatus(s) {
+  const st = document.getElementById("state");
+  st.querySelector(".bar").style.background = STATE_COL[s.state] || "#ccc";
+  st.querySelector(".txt").textContent = s.state_text + (s.thinking ? "  · THINKING" : "");
+  st.style.color = STATE_COL[s.state] || "#ddd";
+  document.getElementById("intent").textContent = s.intent ? (s.intent + (s.target ? " → " + s.target : "")) : "";
+  const b = document.getElementById("batt");
+  b.textContent = s.battery_pct == null ? "" : `Battery ${Math.round(s.battery_pct)} %`;
+  b.className = "meter" + (s.battery_pct != null && s.battery_pct <= 5 ? " bad" : (s.battery_low ? " warn" : ""));
+  const c = document.getElementById("cond");
+  if (s.condition_pct == null) { c.textContent = ""; }
+  else {
+    c.textContent = `Condition ${Math.round(s.condition_pct)} %` + (s.nofly_zone ? "  · IN NO-FLY ZONE" : "");
+    c.className = "meter" + ((s.nofly_zone || s.condition_pct <= 25) ? " bad" : (s.condition_pct <= 60 ? " warn" : ""));
+  }
+  document.getElementById("ftime").textContent = s.flight_time || "";
+}
+
+// ---------------------------------------------------------------- calls
+function renderCalls() {
+  const box = document.getElementById("calls");
+  box.innerHTML = "";
+  for (const c of V.calls) {
+    const d = el("div", "call" + (c.id === activeCall() ? " active" : ""));
+    d.innerHTML = `<div class="top"><span class="id">${esc(c.id)}</span></div>
+      <div class="txt">${esc(c.text)}</div>
+      <div class="rep ${c.reported ? "done" : ""}">${c.reported ? "Report sent" + (c.revisions > 1 ? ` (${c.revisions}×)` : "") : "Not reported"}</div>`;
+    box.appendChild(d);
+  }
+}
+
+// ---------------------------------------------------------------- report form
+function activeCall() { return form.dirty ? form.call : (V ? V.active_call : null); }
+
+function setVal(k, v) {
+  form.vals[k] = v;
+  // keep dependent fields consistent
+  if (k === "people") {
+    if (v === "0") { delete form.vals.water_depth; delete form.vals.worst; if (form.vals.water_motion && !["None","Standing","Flowing"].includes(form.vals.water_motion)) delete form.vals.water_motion; }
+    else if (form.vals.water_depth === undefined && form.vals.water_motion !== undefined && form.vals.water_motion !== "None") { /* keep */ }
+  }
+  if (k === "water_depth") {
+    if (v === "None") form.vals.water_motion = "None";
+    else if (form.vals.water_motion === "None") delete form.vals.water_motion;
+  }
+  if (!form.dirty) { form.dirty = true; form.call = V.active_call; }
+  msg = {text: "", err: false};
+  post("report_event", {event: "field", call: form.call, field: k, value: v});
+  renderForm();
+}
+
+function optButtons(key, options, labelFn, disabled) {
+  const wrap = el("div", "opts");
+  for (const o of options) {
+    const b = el("button", "opt" + (form.vals[key] === o ? " sel" : ""), labelFn ? labelFn(o) : esc(o));
+    b.disabled = !!disabled;
+    b.onclick = () => setVal(key, o);
+    wrap.appendChild(b);
+  }
+  return wrap;
+}
+function field(label, node) { const f = el("div", "field"); f.appendChild(el("div", "lab", label)); f.appendChild(node); return f; }
+
+function renderForm() {
+  const box = document.getElementById("formbody");
+  box.innerHTML = "";
+  const cid = activeCall();
+  if (!cid) {
+    box.appendChild(el("div", "empty", `Fly within ${V.report_radius_m} m of a call to report it.`));
+    if (msg.text) box.appendChild(el("div", "msg" + (msg.err ? " err" : ""), esc(msg.text)));
+    return;
+  }
+  const call = V.calls.find(c => c.id === cid) || {text: ""};
+  box.appendChild(el("div", "who", `Report for ${esc(cid)}`));
+  box.appendChild(el("div", "calltext", esc(call.text)));
+  const v = form.vals;
+  box.appendChild(field("Priority", optButtons("priority", V.fields.priority, o => `${o}<small>${PRIO[o]}</small>`)));
+  box.appendChild(field("People requiring rescue", optButtons("people", V.fields.people)));
+  const nobody = v.people === "0";
+  if (v.people !== undefined && !nobody) {
+    box.appendChild(field("Water depth (at the people)", optButtons("water_depth", V.fields.water_depth, o => `${o}<small>${DEPTH[o]}</small>`)));
+    const motionOpts = v.water_depth === "None" ? ["None"] : ["Standing", "Flowing"];
+    box.appendChild(field("Water motion", optButtons("water_motion", motionOpts, null, v.water_depth === undefined)));
+    box.appendChild(field("Worst condition", optButtons("worst", ["mobile", "immobile_responsive", "unresponsive"],
+      o => `${WORST[o][0]}<small>${WORST[o][1]}</small>`)));
+  } else if (nobody) {
+    box.appendChild(field("Water at the location", optButtons("water_motion", ["None", "Standing", "Flowing"])));
+  }
+  const act = el("div", "actions");
+  const send = el("button", "primary", "Send report");
+  send.onclick = submit;
+  const clr = el("button", "", "Clear");
+  clr.onclick = () => { post("report_event", {event: "cancel", call: form.call}); form = {call: null, vals: {}, dirty: false}; msg = {text: "", err: false}; renderForm(); renderCalls(); };
+  act.appendChild(send); if (form.dirty) act.appendChild(clr);
+  box.appendChild(act);
+  box.appendChild(el("div", "msg" + (msg.err ? " err" : ""), esc(msg.text)));
+}
+
+function submit() {
+  const v = form.vals, cid = activeCall();
+  const need = ["priority", "people", "water_motion"].concat(v.people && v.people !== "0" ? ["water_depth", "worst"] : []);
+  const missing = need.filter(k => v[k] === undefined);
+  if (missing.length) { msg = {text: "Please complete every field.", err: true}; renderForm(); return; }
+  const fields = {priority: v.priority, people: v.people, water_motion: v.water_motion};
+  if (v.people !== "0") { fields.water_depth = v.water_depth; fields.worst = v.worst; }
+  post("report_submit", {call: cid, fields}).then(r => {
+    if (r.ok) { form = {call: null, vals: {}, dirty: false}; msg = {text: `Report for ${cid} sent.`, err: false}; }
+    else msg = {text: r.error || "Not sent.", err: true};
+    renderForm();
+  });
+}
+
+// ---------------------------------------------------------------- requests (secondary tasks)
+function renderTasks() {
+  const box = document.getElementById("tasks");
+  const live = new Set(V.tasks.map(t => t.id));
+  for (const id of Object.keys(taskEls)) if (!live.has(id)) { taskEls[id].el.remove(); delete taskEls[id]; }
+  for (const t of V.tasks) {
+    if (!taskEls[t.id]) taskEls[t.id] = buildTask(t), box.appendChild(taskEls[t.id].el);
+    taskEls[t.id].el.querySelector(".exp").textContent = `Expires in ${t.remaining_s} s`;
+  }
+  let empty = box.querySelector(".empty");
+  if (!V.tasks.length && !empty) box.appendChild(el("div", "empty", "No open requests."));
+  if (V.tasks.length && empty) empty.remove();
+}
+
+function buildTask(t) {
+  const st = {el: el("div", "task"), vals: {}, opened: false};
+  const touch = () => { if (!st.opened) { st.opened = true; post("task_event", {task: t.id}); } };
+  st.el.appendChild(el("div", "tt", esc(t.text)));
+  const choices = t.fields.filter(f => f.type === "choice");
+  const nums = t.fields.filter(f => f.type === "number");
+  if (nums.length) {
+    const nf = el("div", "nf");
+    for (const f of nums) {
+      const lab = el("label", "", esc(f.label || f.name));
+      const inp = el("input"); inp.type = "number"; inp.min = f.min; inp.max = f.max; inp.step = 1;
+      inp.oninput = () => { touch(); st.vals[f.name] = inp.value === "" ? undefined : Number(inp.value); };
+      lab.appendChild(inp); nf.appendChild(lab);
+    }
+    st.el.appendChild(nf);
+  }
+  for (const f of choices) {
+    const wrap = el("div", "opts");
+    for (const o of f.options) {
+      const b = el("button", "opt", esc(o));
+      b.onclick = () => {
+        touch(); st.vals[f.name] = o;
+        wrap.querySelectorAll("button").forEach(x => x.classList.toggle("sel", x === b));
+        if (t.kind === "ACK") send();
+      };
+      wrap.appendChild(b);
+    }
+    st.el.appendChild(wrap);
+  }
+  const m = el("div", "msg");
+  const send = () => {
+    const missing = t.fields.filter(f => st.vals[f.name] === undefined);
+    if (missing.length) { m.textContent = "Please answer every part."; m.className = "msg err"; return; }
+    post("task_answer", {task: t.id, values: st.vals}).then(r => {
+      if (!r.ok) { m.textContent = r.error || "Not sent."; m.className = "msg err"; }
+    });
+  };
+  if (t.kind !== "ACK") {
+    const a = el("div", "actions"); const b = el("button", "primary", "Send"); b.onclick = send; a.appendChild(b); st.el.appendChild(a);
+  }
+  st.el.appendChild(m);
+  st.el.appendChild(el("div", "exp", ""));
+  return st;
+}
+
+// ---------------------------------------------------------------- loop
+let lastPhase = null, lastActive = null, lastCallsKey = "";
+function tick() {
+  fetch("/api/state").then(r => r.json()).then(v => {
+    V = v;
+    const ov = document.getElementById("overlay");
+    if (v.phase !== "flying") {
+      ov.style.display = "flex";
+      document.getElementById("ov1").textContent = v.phase === "ended" ? (v.block ? `Block ${v.block} complete` : "Block complete") : "Waiting for the block to start";
+      document.getElementById("ov2").textContent = v.phase === "ended" ? "Please complete the questionnaire." : "";
+      if (v.phase === "ended") { form = {call: null, vals: {}, dirty: false}; }
+      lastPhase = v.phase;
+      return;
+    }
+    ov.style.display = "none";
+    renderStatus(v.status);
+    const key = JSON.stringify(v.calls.map(c => [c.reported, c.revisions])) + activeCall();
+    if (key !== lastCallsKey) { renderCalls(); lastCallsKey = key; }
+    if (!form.dirty && v.active_call !== lastActive) { form.vals = {}; renderForm(); }
+    if (lastPhase !== "flying") renderForm();
+    lastActive = v.active_call; lastPhase = v.phase;
+    renderTasks();
+  }).catch(() => {}).finally(() => setTimeout(tick, 400));
+}
+window.addEventListener("focus", () => post("focus", {focus: true}));
+window.addEventListener("blur", () => post("focus", {focus: false}));
+tick();
+</script>
+</body>
+</html>

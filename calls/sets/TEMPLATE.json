@@ -1,0 +1,36 @@
+{
+  "_help": "Call set (C4). Copy to calls/sets/<SET>.json (T = training, S1..S5 = experimental). Up to 5 calls; no location repeated within a set or across one participant's sets. priority 1 = most urgent (agent visits by priority). scenario_code = what the operator finds at the call (e.g. car_in_water, on_roof; vocabulary to be set). condition = injury / state details (to be defined). truth = ground truth for scoring the report (7.1). hazards and prompts are placeholders for G1 and H5.",
+  "set_id": "TEMPLATE",
+  "calls": [
+    {
+      "call_id": "C1",
+      "location": "L01",
+      "priority": 1,
+      "call_type": "occupied_vehicle",
+      "details": "911: car stalled under the overpass, driver may still be inside",
+      "truth": {
+        "vehicle_state": "occupied",
+        "people": 1,
+        "water_depth": "waist"
+      },
+      "scenario_code": null,
+      "condition": {}
+    },
+    {
+      "call_id": "C2",
+      "location": "L03",
+      "priority": 2,
+      "call_type": "person_near_water",
+      "details": "Person seen on the riverbank, water rising",
+      "truth": {
+        "vehicle_state": null,
+        "people": 1,
+        "water_depth": null
+      },
+      "scenario_code": null,
+      "condition": {}
+    }
+  ],
+  "hazards": [],
+  "prompts": []
+}
