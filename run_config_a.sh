@@ -205,4 +205,4 @@ python3 "$REPO_DIR/start_gate.py" || { echo "Start cancelled — simulation left
 touch /tmp/uav_start_signal   # the waiting pilot script arms, takes off; control live once airborne
 
 echo ""
-echo "Mission started. Click into the Dashboard window before pressing any flight keys."
+echo "Mission started. Fly with the controller; hold Back for 2 s to stop the session."

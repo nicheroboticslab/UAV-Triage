@@ -12,7 +12,8 @@ Layout (23 Oct remap; body-relative, i.e. relative to where the drone faces):
   Right stick left/right  camera yaw relative to the nose (+-90 deg)
   R3 (right stick click)  recentre camera (45 deg down, forward)
   Start                   mission START (read by start_gate.py, not here)
-  Back, A/B/X/Y, D-pad, L3  unassigned (any press still counts as operator input)
+  Back (Select) held 2 s  stop the whole session (tools/stop_session.sh)
+  A/B/X/Y, D-pad, L3      unassigned (any press still counts as operator input)
 
 Operator input (A1): any stick/trigger outside the deadzone or any button
 press resets the inaction timer, except LB+RB together (emergency), which
@@ -42,7 +43,6 @@ os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 os.environ.setdefault("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1")
 os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 import pygame
-from pynput import keyboard
 
 # ---- Xbox 360 on Linux (xpad driver); confirm with --detect ----
 AX_LEFT_X, AX_LEFT_Y = 0, 1
@@ -72,6 +72,9 @@ MIN_ALT_M = 1.0       # never command below 1 m
 IDLE_RESET_S = 0.5    # stopped and centred this long = next input starts a new burst
 
 EMERGENCY_HOLD_S = 0.5
+STOP_HOLD_S = 2.0          # Back/Select held this long stops the whole session (Ben, 23 Oct)
+STOP_SCRIPT = os.path.expanduser("~/UAV-Triage/tools/stop_session.sh")
+STOP_LOG = os.path.expanduser("~/UAV-Triage/logs/stop_session.log")
 
 # Camera gimbal (degrees). Pitch: 0 = horizon, 90 = straight down.
 GIMBAL_PITCH_RANGE = (0.0, 90.0)
@@ -79,13 +82,6 @@ GIMBAL_YAW_RANGE = (-90.0, 90.0)
 GIMBAL_HOME = (45.0, 0.0)
 GIMBAL_RATE = 60.0    # deg/s at full stick
 
-# The pilot script's key handler: up = +north, down = -north, left = +east,
-# right = -east, 'w' = climb, 's' = descend. One key event per burst goes
-# through it so MANUAL takeover and logging happen exactly as with the keyboard.
-K_NORTH, K_SOUTH = keyboard.Key.up, keyboard.Key.down
-K_EAST, K_WEST = keyboard.Key.left, keyboard.Key.right
-K_CLIMB, K_DESCEND = keyboard.KeyCode.from_char('w'), keyboard.KeyCode.from_char('s')
-EMERGENCY_LAND = keyboard.KeyCode.from_char('7')
 
 NO_INPUT_RESET = {BTN_LB, BTN_RB}   # bumpers count via the altitude path instead
 DATASET_DIR = os.path.expanduser("~/uav_dataset")
@@ -121,6 +117,8 @@ class ControllerInput:
         self._vz = 0.0                     # commanded climb rate (m/s, + = up)
         self._both_since = None
         self._emergency_sent = False
+        self._back_since = None
+        self._stop_sent = False
         self._trig_seen_rest = {AX_LT: False, AX_RT: False}
         self._log_every = max(1, POLL_HZ // LOG_HZ)
         self._tick = 0
@@ -142,11 +140,11 @@ class ControllerInput:
         except Exception:
             print(msg)
 
-    def _send(self, key):
+    def _take_control(self):
         try:
-            self.node.on_key_press(key)
+            self.node.operator_input("controller")
         except Exception as e:
-            self._log(f"[CONTROLLER] key handler error: {e!r}")
+            self._log(f"[CONTROLLER] operator_input error: {e!r}")
 
     # ---------- raw input ----------
     def _axis(self, j, idx):
@@ -180,12 +178,8 @@ class ControllerInput:
         now = time.time()
 
         if active and not self._burst:
-            dom = max((abs(fwd), K_NORTH if fwd > 0 else K_SOUTH),
-                      (abs(right), K_EAST if right > 0 else K_WEST),
-                      (abs(up), K_CLIMB if up > 0 else K_DESCEND),
-                      (abs(turn), K_NORTH), key=lambda t: t[0])[1]
             start_yaw = self._commanded_yaw()
-            self._send(dom)                        # MANUAL takeover + logging via the pilot
+            self._take_control()                   # MANUAL takeover + logging, target not moved
             if hasattr(n, "loitering"):
                 n.loitering = False
             n.manual_yaw = start_yaw
@@ -257,8 +251,19 @@ class ControllerInput:
     def step(self, j, prev, dt):
         """One polling cycle. Returns the current button states."""
         buttons = [j.get_button(i) for i in range(j.get_numbuttons())]
+        # Back/Select held STOP_HOLD_S: stop the whole session (replaces dashboard Q Q).
+        # Checked before block_ended so a finished block can still be closed.
+        if BTN_BACK < len(buttons) and buttons[BTN_BACK]:
+            self._back_since = (self._back_since or 0.0) + dt
+            if not self._stop_sent and self._back_since >= STOP_HOLD_S - 1e-6:
+                self._stop_sent = True
+                self._log("[CONTROLLER] Back held 2 s → stopping the session")
+                self._event("session_stop", "Back held 2 s")
+                self._stop_session()
+        else:
+            self._back_since = None
         if getattr(self.node, "block_ended", False):
-            return buttons                         # block over: ignore all input
+            return buttons                         # block over: ignore all other input
 
         def held(i):
             return i < len(buttons) and bool(buttons[i])
@@ -275,10 +280,7 @@ class ControllerInput:
             if not self._emergency_sent and self._both_since >= EMERGENCY_HOLD_S - 1e-6:
                 self._emergency_sent = True
                 self._log("[CONTROLLER] LB+RB held → emergency return home and land")
-                if hasattr(self.node, "emergency_return"):
-                    self.node.emergency_return()
-                else:
-                    self._send(EMERGENCY_LAND)
+                self.node.emergency_return()
                 return buttons
         else:
             self._both_since = None
@@ -335,33 +337,98 @@ class ControllerInput:
             self._log(f"[CONTROLLER] log error: {e!r}")
 
     # ---------- thread ----------
-    def _open(self):
-        if self._joystick is not None:
-            return self._joystick
-        pygame.display.init()
+    # Hot-plug (Ben, 23 Oct): the controller may be missing at start or be
+    # unplugged / lose its wireless link. The thread keeps running: while no
+    # controller is attached it rescans every RESCAN_S; on disconnect it stops
+    # all flight input (the drone brakes and holds) and waits for reconnection.
+    RESCAN_S = 1.0
+
+    def _attach(self):
+        """Open the first controller, or None."""
+        pygame.joystick.quit()
         pygame.joystick.init()
         if pygame.joystick.get_count() == 0:
-            self._log("[CONTROLLER] No controller found — keyboard only")
             return None
         j = pygame.joystick.Joystick(0)
         j.init()
         self._log(f"[CONTROLLER] Connected: {j.get_name()} "
                   f"({j.get_numaxes()} axes, {j.get_numbuttons()} buttons)")
+        self._event("controller_connected", j.get_name())
         return j
 
+    def _detach(self, why):
+        self._log(f"[CONTROLLER] Disconnected ({why}) — no flight input until it is reconnected")
+        self._event("controller_disconnected", why)
+        n = self.node
+        # stop commanding motion: the drone brakes to a hold at its position
+        self._v, self._vz, self._burst = [0.0, 0.0], 0.0, False
+        self._both_since, self._emergency_sent = None, False
+        self._trig_seen_rest = {AX_LT: False, AX_RT: False}
+        if hasattr(n, "manual_vel"):
+            n.manual_vel = None
+        if hasattr(n, "current_pos") and hasattr(n, "target_pos") and self._in_manual():
+            cur = list(n.current_pos)
+            n.target_pos[0], n.target_pos[1], n.target_pos[2] = cur[0], cur[1], cur[2]
+
+    def _stop_session(self):
+        """Run tools/stop_session.sh detached: it SIGINTs the pilot (this process),
+        so it must not be a child that dies with it."""
+        import subprocess
+        try:
+            os.makedirs(os.path.dirname(STOP_LOG), exist_ok=True)
+            with open(STOP_LOG, "a") as log:
+                subprocess.Popen(["bash", STOP_SCRIPT], stdout=log, stderr=subprocess.STDOUT,
+                                 stdin=subprocess.DEVNULL, start_new_session=True)
+        except Exception as e:
+            self._log(f"[CONTROLLER] could not start stop_session.sh: {e!r}")
+
+    def _event(self, kind, detail):
+        """Connection events go into the pilot's event log (and from there the decision records)."""
+        try:
+            self.node.log_event(f"[CONTROLLER] {kind}: {detail}")
+        except Exception:
+            pass
+
     def _loop(self):
-        j = self._open()
-        if j is None:
+        if self._joystick is not None:          # test path: injected joystick, no hot-plug
+            j, prev, last = self._joystick, [0] * self._joystick.get_numbuttons(), time.time()
+            while self.running:
+                now = time.time(); dt = min(0.2, max(1e-3, now - last)); last = now
+                prev = self.step(j, prev, dt)
+                time.sleep(1.0 / POLL_HZ)
             return
-        prev = [0] * j.get_numbuttons()
+        pygame.display.init()
+        j, prev, next_scan, warned = None, [], 0.0, False
         last = time.time()
         while self.running:
-            if self._joystick is None:
-                pygame.event.pump()
             now = time.time()
-            dt = min(0.2, max(1e-3, now - last))   # measured, bounded
-            last = now
-            prev = self.step(j, prev, dt)
+            if j is None:
+                if now >= next_scan:
+                    next_scan = now + self.RESCAN_S
+                    j = self._attach()
+                    if j is None and not warned:
+                        self._log("[CONTROLLER] No controller found — waiting for one to be connected")
+                        self._event("controller_missing", "waiting")
+                        warned = True
+                    if j is not None:
+                        prev, warned, last = [0] * j.get_numbuttons(), False, time.time()
+                if j is None:
+                    time.sleep(0.2)
+                    continue
+            removed = False
+            for ev in pygame.event.get():
+                if ev.type == getattr(pygame, "JOYDEVICEREMOVED", -1):
+                    removed = True
+            try:
+                if removed or not j.get_init():
+                    raise pygame.error("device removed")
+                dt = min(0.2, max(1e-3, now - last))
+                last = now
+                prev = self.step(j, prev, dt)
+            except pygame.error as e:
+                self._detach(str(e))
+                j, next_scan = None, time.time() + self.RESCAN_S
+                continue
             time.sleep(1.0 / POLL_HZ)
 
 

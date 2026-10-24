@@ -29,7 +29,6 @@ from battery_model import BatterySystem, load_config as load_battery_config
 from px4_battery_display import PX4BatteryDisplay
 import call_sets
 from datetime import datetime
-from pynput import keyboard
 from enum import Enum
 from uav_control.controller_input import ControllerInput
 
@@ -430,28 +429,6 @@ class UAVAutonomousNode(Node):
         self.timer = self.create_timer(self.timer_period, self.loop)
         self.nofly = NoFlyMonitor(DATASET_DIR, self.get_logger(), self.log_event)
 
-        def _terminal_focused():
-            try:
-                result = subprocess.run(
-                    ['xdotool', 'getactivewindow', 'getwindowname'],
-                    capture_output=True, text=True, timeout=0.5
-                )
-                return 'Dashboard' in result.stdout
-            except Exception:
-                return False
-        self._terminal_focused = _terminal_focused
-        _original_on_key_press = self.on_key_press
-        def _guarded_on_key_press(key):
-            # pynput sees every key system-wide; act only when the Dashboard
-            # window has focus, and never print or log the key itself.
-            if self._terminal_focused():
-                try:
-                    return _original_on_key_press(key)
-                except Exception as e:
-                    print(f"[KEYBOARD] key handler error: {type(e).__name__}", flush=True)
-        kbl = keyboard.Listener(on_press=_guarded_on_key_press)
-        kbl.daemon = True
-        kbl.start()
         self.controller = ControllerInput(self)
         self.controller.start()
 
@@ -672,15 +649,9 @@ Consider: Is it safe to resume? Is the drift acceptable? Is this a pattern?
         log("╔══════════════════════════════════════════════════════════╗")
         log("║   UAV AUTONOMOUS SYSTEM — FINAL FIXED VERSION           ║")
         log("║                                                          ║")
-        log("║  FIXES: All sectors visited | Test keys stable          ║")
+        log("║  Input: Xbox controller only. Keyboard: none (Q Q in    ║")
+        log("║  the dashboard stops the session).                      ║")
         log("║                                                          ║")
-        log("║  T = force EKF → 0.2   (LOCKED until you press R)       ║")
-        log("║  Y = force Batt → 10%  (LOCKED until you press R)       ║")
-        log("║  R = reset BOTH to normal                               ║")
-        log("║  Z = simulate signal loss (5s)                          ║")
-        log("║  F = force LLM re-query now                             ║")
-        log("║  1-7 = force specific intent directly                   ║")
-        log("║  H = show dataset stats                                 ║")
         log("╚══════════════════════════════════════════════════════════╝")
 
     def _print_pilot_decision_banner(self, intent, target_name, target_pos,
@@ -766,148 +737,27 @@ Consider: Is it safe to resume? Is the drift acceptable? Is this a pattern?
             self.log_event(f"EKF recovered: {self.ekf_confidence:.2f}")
 
     # =========================================================
-    #  KEYBOARD
+    #  OPERATOR INPUT (controller only)
     # =========================================================
+    # Ben 23 Oct: no keyboard commands in the pilot script. The only keyboard
+    # command left is Q Q in the dashboard (stop session). Flight keys, test
+    # keys (T/Y/R/Z), F, B, H and 1-7 were removed so a participant keypress
+    # can never change the simulation. The report portal (E4) uses its own
+    # keyboard/mouse window and does not count as operator input.
 
-    def on_key_press(self, key):
+    def operator_input(self, source="controller"):
+        """Operator flight input: take manual control if the agent was flying.
+        Does not move the target (the old fake arrow-key nudged it 1 m)."""
         if self.block_ended:
             return
-        step = 1.0
-        try:
-            moved = False
-            if   key == keyboard.Key.up:    self.target_pos[0] += step; moved = True
-            elif key == keyboard.Key.down:  self.target_pos[0] -= step; moved = True
-            elif key == keyboard.Key.left:  self.target_pos[1] += step; moved = True
-            elif key == keyboard.Key.right: self.target_pos[1] -= step; moved = True
-            elif key.char == 'w': self.target_pos[2] -= step; moved = True
-            elif key.char == 's': self.target_pos[2] += step; moved = True
-
-            elif key.char == 'b':
-                self.get_logger().info(
-                    f"[BATT] {self.battery_pct:.1f}% | {self.battery_volt:.2f}V | {self.battery_amp:.2f}A"
-                )
-                return
-
-            elif key.char == 'h':
-                ds = self.dataset.get_stats()
-                visited   = [s['name'] for s in MAP['sectors'] if s['id'] in self.visited_sectors]
-                remaining = [s['name'] for s in MAP['sectors'] if s['id'] not in self.visited_sectors]
-                self.get_logger().info(
-                    f"[INFO] Dataset decisions={ds['total_decisions']} "
-                    f"fallbacks={ds['fallback_count']} reentries={ds['reentry_count']}"
-                )
-                self.get_logger().info(f"[INFO] Visited={visited}  Remaining={remaining}")
-                return
-
-            elif key.char == 't':
-                # =====================================================
-                #  FIX 2: T = force EKF bad, SET override flag
-                #  Override flag blocks ekf_cb from reverting the value
-                #  Override will be cleared in _llm_worker after LLM responds
-                # =====================================================
-                self.ekf_override       = True
-                self.ekf_override_value = 0.2
-                self.ekf_confidence     = 0.2
-                self.log_event("[TEST] EKF forced → 0.2 (LOCKED — press R to release)")
-                self.get_logger().warn("[TEST] ⚠ EKF override ON → 0.2")
-                self.last_llm_time = 0.0
-                self.drone_state   = DroneState.AUTO_INIT
-                return
-
-            elif key.char == 'y':
-                # =====================================================
-                #  FIX 2: Y = force battery low, SET override flag
-                # =====================================================
-                self.battery_override       = True
-                self.battery_override_value = 10.0
-                self.battery_pct            = 10.0
-                self.log_event("[TEST] Battery forced → 10% (LOCKED — press R to release)")
-                self.get_logger().warn("[TEST] ⚠ Battery override ON → 10%")
-                self.last_llm_time = 0.0
-                self.drone_state   = DroneState.AUTO_INIT
-                return
-
-            elif key.char == 'r':
-                # =====================================================
-                #  FIX 2: R = reset BOTH overrides to normal
-                # =====================================================
-                self.ekf_override     = False
-                self.battery_override = False
-                self.ekf_confidence   = 1.0
-                self.battery_pct      = 100.0
-                self.log_event("[TEST] Reset: EKF → 1.0, Battery → 100% (overrides OFF)")
-                self.get_logger().info("[TEST] ✅ Both overrides cleared — sensors reading normally")
-                self.last_llm_time = 0.0
-                self.drone_state   = DroneState.AUTO_INIT
-                return
-
-            elif key.char == 'f':
-                self.last_llm_time = 0.0
-                self.drone_state   = DroneState.AUTO_INIT
-                self.dwell_active  = False
-                self.log_event("Operator forced LLM re-query.")
-                return
-
-            elif key.char == 'z':
-                def _sim():
-                    self.pre_loss_intent      = self.current_intent
-                    self.pre_loss_wp_name     = self.current_wp_name
-                    self.pre_loss_battery     = self.battery_pct
-                    self.pre_loss_position    = self.current_pos.copy()
-                    self.signal_was_lost      = True
-                    self.signal_lost_time     = time.time()
-                    self.signal_lost_battery  = self.battery_pct
-                    self.signal_lost_position = self.current_pos.copy()
-                    self.signal_loss_count   += 1
-                    self.signal_loss_since_depart = True
-                    self.log_event(f"[TEST] Signal loss #{self.signal_loss_count} simulated (5s)")
-                    time.sleep(5.0)
-                    self.battery_pct             = max(0.0, self.battery_pct - 2.0)
-                    duration                     = time.time() - self.signal_lost_time
-                    self.last_loss_duration      = duration
-                    self.last_loss_battery_cost  = self.signal_lost_battery - self.battery_pct
-                    self.last_loss_drift         = 1.5
-                    self.signal_was_lost         = False
-                    self.post_signal_loss_reentry = True
-                    self.log_event(
-                        f"[TEST] Signal regained. Duration: {duration:.1f}s. "
-                        f"Cost: {self.last_loss_battery_cost:.1f}%"
-                    )
-                    self._print_signal_banner("REGAINED (simulated)",
-                        f"Duration: {duration:.1f}s | Cost: {self.last_loss_battery_cost:.1f}%")
-                    self.last_llm_time = 0.0
-                    self.drone_state   = DroneState.AUTO_INIT
-                threading.Thread(target=_sim, daemon=True).start()
-                return
-
-            elif key.char in '1234567':
-                intent = Intent(int(key.char))
-                self.log_event(f"[TEST] Intent forced → {intent.name}")
-                new_target, wp_name = self._generate_waypoint(intent)
-                self.current_intent  = intent
-                self.target_pos      = new_target
-                self.current_wp_name = wp_name
-                self.drone_state     = DroneState.AUTO_FLYING
-                self.dwell_active    = False
-                self._print_pilot_decision_banner(
-                    intent, wp_name, new_target, 99,
-                    f"Manually forced by operator (key {key.char}).",
-                    "Until next operator input"
-                )
-                return
-
-            if moved:
-                self.last_key_time = time.time()
-                self.loitering = False; self.circle_center = None
-                self.dwell_active = False
-                if self.drone_state != DroneState.MANUAL:
-                    self.log_event(f"Human took control from {self.drone_state.value}. Batt: {self.battery_pct:.1f}%")
-                    self.drone_state    = DroneState.MANUAL
-                    self.current_intent = None
-                    self._print_mode_change("MANUAL", "Human operator took control")
-
-        except AttributeError:
-            pass
+        self.last_key_time = time.time()
+        self.loitering = False; self.circle_center = None
+        self.dwell_active = False
+        if self.drone_state != DroneState.MANUAL:
+            self.log_event(f"Human took control from {self.drone_state.value} ({source}). Batt: {self.battery_pct:.1f}%")
+            self.drone_state    = DroneState.MANUAL
+            self.current_intent = None
+            self._print_mode_change("MANUAL", "Human operator took control")
 
     # =========================================================
     #  COMM LOSS / WAYPOINT
@@ -1735,19 +1585,13 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
 # ============================================================
 def wait_for_start():
     """The pilot script is started before START so everything is loaded. It
-    waits here until start_gate.py (controller Start or Enter in the launcher
-    terminal) creates START_SIGNAL_FILE, or Enter is pressed in this window."""
-    import select
-    print(f"[SYS] Loaded. Waiting for START (controller Start, Enter in the launcher or here, "
-          f"or: touch {START_SIGNAL_FILE})", flush=True)
+    waits here until start_gate.py (Start on the controller) creates
+    START_SIGNAL_FILE. No keyboard start (Ben, 23 Oct). Researcher fallback
+    without the launcher: touch the file from a terminal."""
+    print(f"[SYS] Loaded. Waiting for START on the controller "
+          f"(manual runs: touch {START_SIGNAL_FILE})", flush=True)
     while not os.path.exists(START_SIGNAL_FILE):
-        try:
-            r, _, _ = select.select([sys.stdin], [], [], 0.1)
-            if r:
-                sys.stdin.readline()
-                break
-        except Exception:
-            time.sleep(0.1)
+        time.sleep(0.1)
     print("[SYS] START", flush=True)
 
 
