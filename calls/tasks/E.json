@@ -36,25 +36,7 @@
  "tasks": [
   {
    "id": "T01",
-   "t_s": 45,
-   "expire_s": 60,
-   "kind": "ACK",
-   "call": null,
-   "route_pos": null,
-   "text": "Dispatch: Engine 3 is staging at home base. Acknowledge.",
-   "fields": [
-    {
-     "name": "ack",
-     "type": "choice",
-     "options": [
-      "Acknowledged"
-     ]
-    }
-   ]
-  },
-  {
-   "id": "T02",
-   "t_s": 95,
+   "t_s": 33,
    "expire_s": 60,
    "kind": "STATUS",
    "call": null,
@@ -78,8 +60,8 @@
    ]
   },
   {
-   "id": "T03",
-   "t_s": 140,
+   "id": "T02",
+   "t_s": 107,
    "expire_s": 60,
    "kind": "NEAREST",
    "call": null,
@@ -100,8 +82,89 @@
    ]
   },
   {
+   "id": "T03",
+   "t_s": 142,
+   "expire_s": 60,
+   "kind": "ACK",
+   "call": null,
+   "route_pos": null,
+   "text": "Dispatch: medical team en route to home base. Acknowledge.",
+   "fields": [
+    {
+     "name": "ack",
+     "type": "choice",
+     "options": [
+      "Acknowledged"
+     ]
+    }
+   ]
+  },
+  {
    "id": "T04",
-   "t_s": 190,
+   "t_s": 193,
+   "expire_s": 60,
+   "kind": "NOFLY_LINE",
+   "call": "C2",
+   "route_pos": 2,
+   "text": "Air operations: is a no-fly zone on the straight line between you and C2?",
+   "fields": [
+    {
+     "name": "nofly",
+     "type": "choice",
+     "options": [
+      "Yes",
+      "No"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "T05",
+   "t_s": 235,
+   "expire_s": 60,
+   "kind": "BOAT",
+   "call": null,
+   "route_pos": null,
+   "text": "Incident command has one boat team. Which of the calls you have reported should it go to first?",
+   "fields": [
+    {
+     "name": "call",
+     "type": "choice",
+     "options": [
+      "C1",
+      "C2",
+      "C3",
+      "C4",
+      "C5",
+      "No call needs a boat"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "T06",
+   "t_s": 296,
+   "expire_s": 60,
+   "kind": "DISTANCE",
+   "call": "C3",
+   "route_pos": 4,
+   "text": "Swift-water team at home base: how far is C3 from home base?",
+   "fields": [
+    {
+     "name": "band",
+     "type": "choice",
+     "options": [
+      "Under 300 m",
+      "300-600 m",
+      "600-900 m",
+      "Over 900 m"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "T07",
+   "t_s": 331,
    "expire_s": 60,
    "kind": "NOFLY_LINE",
    "call": "C5",
@@ -119,8 +182,8 @@
    ]
   },
   {
-   "id": "T05",
-   "t_s": 235,
+   "id": "T08",
+   "t_s": 383,
    "expire_s": 60,
    "kind": "HOME_BEARING",
    "call": null,
@@ -144,70 +207,8 @@
    ]
   },
   {
-   "id": "T06",
-   "t_s": 285,
-   "expire_s": 60,
-   "kind": "DISTANCE",
-   "call": "C4",
-   "route_pos": 5,
-   "text": "Swift-water team at home base: how far is C4 from home base?",
-   "fields": [
-    {
-     "name": "band",
-     "type": "choice",
-     "options": [
-      "Under 300 m",
-      "300-600 m",
-      "600-900 m",
-      "Over 900 m"
-     ]
-    }
-   ]
-  },
-  {
-   "id": "T07",
-   "t_s": 330,
-   "expire_s": 60,
-   "kind": "BOAT",
-   "call": null,
-   "route_pos": null,
-   "text": "Incident command has one boat team. Which of the calls you have reported should it go to first?",
-   "fields": [
-    {
-     "name": "call",
-     "type": "choice",
-     "options": [
-      "C1",
-      "C2",
-      "C3",
-      "C4",
-      "C5",
-      "No call needs a boat"
-     ]
-    }
-   ]
-  },
-  {
-   "id": "T08",
-   "t_s": 380,
-   "expire_s": 60,
-   "kind": "ACK",
-   "call": "C5",
-   "route_pos": 3,
-   "text": "Dispatch: a swift-water rescue team has been requested for the area near C5. Acknowledge.",
-   "fields": [
-    {
-     "name": "ack",
-     "type": "choice",
-     "options": [
-      "Acknowledged"
-     ]
-    }
-   ]
-  },
-  {
    "id": "T09",
-   "t_s": 425,
+   "t_s": 418,
    "expire_s": 60,
    "kind": "NEAREST",
    "call": null,
@@ -229,7 +230,7 @@
   },
   {
    "id": "T10",
-   "t_s": 475,
+   "t_s": 480,
    "expire_s": 60,
    "kind": "STATUS",
    "call": null,
@@ -254,26 +255,50 @@
   },
   {
    "id": "T11",
-   "t_s": 520,
+   "t_s": 515,
    "expire_s": 60,
-   "kind": "NOFLY_LINE",
+   "kind": "ACK",
    "call": "C3",
    "route_pos": 4,
-   "text": "Air operations: is a no-fly zone on the straight line between you and C3?",
+   "text": "Dispatch: shift change at dispatch in 10 minutes. Acknowledge.",
    "fields": [
     {
-     "name": "nofly",
+     "name": "ack",
      "type": "choice",
      "options": [
-      "Yes",
-      "No"
+      "Acknowledged"
      ]
     }
    ]
   },
   {
    "id": "T12",
-   "t_s": 570,
+   "t_s": 559,
+   "expire_s": 60,
+   "kind": "STATUS",
+   "call": null,
+   "route_pos": null,
+   "text": "Incident command: report your vehicle status.",
+   "fields": [
+    {
+     "name": "battery_pct",
+     "label": "Battery %",
+     "type": "number",
+     "min": 0,
+     "max": 100
+    },
+    {
+     "name": "condition_pct",
+     "label": "Condition %",
+     "type": "number",
+     "min": 0,
+     "max": 100
+    }
+   ]
+  },
+  {
+   "id": "T13",
+   "t_s": 608,
    "expire_s": 60,
    "kind": "HOME_BEARING",
    "call": null,
@@ -297,29 +322,8 @@
    ]
   },
   {
-   "id": "T13",
-   "t_s": 615,
-   "expire_s": 60,
-   "kind": "DISTANCE",
-   "call": "C2",
-   "route_pos": 2,
-   "text": "Swift-water team at home base: how far is C2 from home base?",
-   "fields": [
-    {
-     "name": "band",
-     "type": "choice",
-     "options": [
-      "Under 300 m",
-      "300-600 m",
-      "600-900 m",
-      "Over 900 m"
-     ]
-    }
-   ]
-  },
-  {
    "id": "T14",
-   "t_s": 665,
+   "t_s": 654,
    "expire_s": 60,
    "kind": "BOAT",
    "call": null,
@@ -342,12 +346,12 @@
   },
   {
    "id": "T15",
-   "t_s": 710,
+   "t_s": 719,
    "expire_s": 60,
    "kind": "ACK",
    "call": "C4",
    "route_pos": 5,
-   "text": "Dispatch: police have closed the roads around C4. Acknowledge.",
+   "text": "Dispatch: dam operators report rising levels near C4. Acknowledge.",
    "fields": [
     {
      "name": "ack",
@@ -360,26 +364,22 @@
   },
   {
    "id": "T16",
-   "t_s": 760,
+   "t_s": 754,
    "expire_s": 60,
-   "kind": "STATUS",
-   "call": null,
-   "route_pos": null,
-   "text": "Incident command: report your vehicle status.",
+   "kind": "DISTANCE",
+   "call": "C4",
+   "route_pos": 5,
+   "text": "Swift-water team at home base: how far is C4 from home base?",
    "fields": [
     {
-     "name": "battery_pct",
-     "label": "Battery %",
-     "type": "number",
-     "min": 0,
-     "max": 100
-    },
-    {
-     "name": "condition_pct",
-     "label": "Condition %",
-     "type": "number",
-     "min": 0,
-     "max": 100
+     "name": "band",
+     "type": "choice",
+     "options": [
+      "Under 300 m",
+      "300-600 m",
+      "600-900 m",
+      "Over 900 m"
+     ]
     }
    ]
   }

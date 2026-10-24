@@ -36,25 +36,29 @@
  "tasks": [
   {
    "id": "T01",
-   "t_s": 45,
+   "t_s": 57,
    "expire_s": 60,
-   "kind": "ACK",
+   "kind": "NEAREST",
    "call": null,
    "route_pos": null,
-   "text": "Dispatch: Engine 3 is staging at home base. Acknowledge.",
+   "text": "Incident command: which call location are you closest to right now?",
    "fields": [
     {
-     "name": "ack",
+     "name": "call",
      "type": "choice",
      "options": [
-      "Acknowledged"
+      "C1",
+      "C2",
+      "C3",
+      "C4",
+      "C5"
      ]
     }
    ]
   },
   {
    "id": "T02",
-   "t_s": 95,
+   "t_s": 92,
    "expire_s": 60,
    "kind": "STATUS",
    "call": null,
@@ -79,48 +83,7 @@
   },
   {
    "id": "T03",
-   "t_s": 140,
-   "expire_s": 60,
-   "kind": "NEAREST",
-   "call": null,
-   "route_pos": null,
-   "text": "Incident command: which call location are you closest to right now?",
-   "fields": [
-    {
-     "name": "call",
-     "type": "choice",
-     "options": [
-      "C1",
-      "C2",
-      "C3",
-      "C4",
-      "C5"
-     ]
-    }
-   ]
-  },
-  {
-   "id": "T04",
-   "t_s": 190,
-   "expire_s": 60,
-   "kind": "NOFLY_LINE",
-   "call": "C1",
-   "route_pos": 3,
-   "text": "Air operations: is a no-fly zone on the straight line between you and C1?",
-   "fields": [
-    {
-     "name": "nofly",
-     "type": "choice",
-     "options": [
-      "Yes",
-      "No"
-     ]
-    }
-   ]
-  },
-  {
-   "id": "T05",
-   "t_s": 235,
+   "t_s": 153,
    "expire_s": 60,
    "kind": "HOME_BEARING",
    "call": null,
@@ -144,29 +107,8 @@
    ]
   },
   {
-   "id": "T06",
-   "t_s": 285,
-   "expire_s": 60,
-   "kind": "DISTANCE",
-   "call": "C4",
-   "route_pos": 5,
-   "text": "Swift-water team at home base: how far is C4 from home base?",
-   "fields": [
-    {
-     "name": "band",
-     "type": "choice",
-     "options": [
-      "Under 300 m",
-      "300-600 m",
-      "600-900 m",
-      "Over 900 m"
-     ]
-    }
-   ]
-  },
-  {
-   "id": "T07",
-   "t_s": 330,
+   "id": "T04",
+   "t_s": 199,
    "expire_s": 60,
    "kind": "BOAT",
    "call": null,
@@ -188,13 +130,13 @@
    ]
   },
   {
-   "id": "T08",
-   "t_s": 380,
+   "id": "T05",
+   "t_s": 239,
    "expire_s": 60,
    "kind": "ACK",
-   "call": "C1",
-   "route_pos": 3,
-   "text": "Dispatch: a swift-water rescue team has been requested for the area near C1. Acknowledge.",
+   "call": null,
+   "route_pos": null,
+   "text": "Dispatch: National Weather Service extended the flash flood warning. Acknowledge.",
    "fields": [
     {
      "name": "ack",
@@ -206,8 +148,8 @@
    ]
   },
   {
-   "id": "T09",
-   "t_s": 425,
+   "id": "T06",
+   "t_s": 295,
    "expire_s": 60,
    "kind": "NEAREST",
    "call": null,
@@ -228,8 +170,66 @@
    ]
   },
   {
+   "id": "T07",
+   "t_s": 342,
+   "expire_s": 60,
+   "kind": "DISTANCE",
+   "call": "C3",
+   "route_pos": 4,
+   "text": "Swift-water team at home base: how far is C3 from home base?",
+   "fields": [
+    {
+     "name": "band",
+     "type": "choice",
+     "options": [
+      "Under 300 m",
+      "300-600 m",
+      "600-900 m",
+      "Over 900 m"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "T08",
+   "t_s": 383,
+   "expire_s": 60,
+   "kind": "NOFLY_LINE",
+   "call": "C1",
+   "route_pos": 3,
+   "text": "Air operations: is a no-fly zone on the straight line between you and C1?",
+   "fields": [
+    {
+     "name": "nofly",
+     "type": "choice",
+     "options": [
+      "Yes",
+      "No"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "T09",
+   "t_s": 418,
+   "expire_s": 60,
+   "kind": "ACK",
+   "call": "C3",
+   "route_pos": 4,
+   "text": "Dispatch: a boat team is launching upstream of C3. Acknowledge.",
+   "fields": [
+    {
+     "name": "ack",
+     "type": "choice",
+     "options": [
+      "Acknowledged"
+     ]
+    }
+   ]
+  },
+  {
    "id": "T10",
-   "t_s": 475,
+   "t_s": 485,
    "expire_s": 60,
    "kind": "STATUS",
    "call": null,
@@ -254,26 +254,76 @@
   },
   {
    "id": "T11",
-   "t_s": 520,
+   "t_s": 526,
    "expire_s": 60,
-   "kind": "NOFLY_LINE",
-   "call": "C3",
-   "route_pos": 4,
-   "text": "Air operations: is a no-fly zone on the straight line between you and C3?",
+   "kind": "BOAT",
+   "call": null,
+   "route_pos": null,
+   "text": "Incident command has one boat team. Which of the calls you have reported should it go to first?",
    "fields": [
     {
-     "name": "nofly",
+     "name": "call",
      "type": "choice",
      "options": [
-      "Yes",
-      "No"
+      "C1",
+      "C2",
+      "C3",
+      "C4",
+      "C5",
+      "No call needs a boat"
      ]
     }
    ]
   },
   {
    "id": "T12",
-   "t_s": 570,
+   "t_s": 581,
+   "expire_s": 60,
+   "kind": "STATUS",
+   "call": null,
+   "route_pos": null,
+   "text": "Incident command: report your vehicle status.",
+   "fields": [
+    {
+     "name": "battery_pct",
+     "label": "Battery %",
+     "type": "number",
+     "min": 0,
+     "max": 100
+    },
+    {
+     "name": "condition_pct",
+     "label": "Condition %",
+     "type": "number",
+     "min": 0,
+     "max": 100
+    }
+   ]
+  },
+  {
+   "id": "T13",
+   "t_s": 624,
+   "expire_s": 60,
+   "kind": "DISTANCE",
+   "call": "C4",
+   "route_pos": 5,
+   "text": "Swift-water team at home base: how far is C4 from home base?",
+   "fields": [
+    {
+     "name": "band",
+     "type": "choice",
+     "options": [
+      "Under 300 m",
+      "300-600 m",
+      "600-900 m",
+      "Over 900 m"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "T14",
+   "t_s": 659,
    "expire_s": 60,
    "kind": "HOME_BEARING",
    "call": null,
@@ -297,57 +347,32 @@
    ]
   },
   {
-   "id": "T13",
-   "t_s": 615,
-   "expire_s": 60,
-   "kind": "DISTANCE",
-   "call": "C5",
-   "route_pos": 2,
-   "text": "Swift-water team at home base: how far is C5 from home base?",
-   "fields": [
-    {
-     "name": "band",
-     "type": "choice",
-     "options": [
-      "Under 300 m",
-      "300-600 m",
-      "600-900 m",
-      "Over 900 m"
-     ]
-    }
-   ]
-  },
-  {
-   "id": "T14",
-   "t_s": 665,
-   "expire_s": 60,
-   "kind": "BOAT",
-   "call": null,
-   "route_pos": null,
-   "text": "Incident command has one boat team. Which of the calls you have reported should it go to first?",
-   "fields": [
-    {
-     "name": "call",
-     "type": "choice",
-     "options": [
-      "C1",
-      "C2",
-      "C3",
-      "C4",
-      "C5",
-      "No call needs a boat"
-     ]
-    }
-   ]
-  },
-  {
    "id": "T15",
-   "t_s": 710,
+   "t_s": 700,
    "expire_s": 60,
-   "kind": "ACK",
+   "kind": "NOFLY_LINE",
    "call": "C4",
    "route_pos": 5,
-   "text": "Dispatch: police have closed the roads around C4. Acknowledge.",
+   "text": "Air operations: is a no-fly zone on the straight line between you and C4?",
+   "fields": [
+    {
+     "name": "nofly",
+     "type": "choice",
+     "options": [
+      "Yes",
+      "No"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "T16",
+   "t_s": 754,
+   "expire_s": 60,
+   "kind": "ACK",
+   "call": "C5",
+   "route_pos": 2,
+   "text": "Dispatch: road closures expanded around C5. Acknowledge.",
    "fields": [
     {
      "name": "ack",
@@ -355,31 +380,6 @@
      "options": [
       "Acknowledged"
      ]
-    }
-   ]
-  },
-  {
-   "id": "T16",
-   "t_s": 760,
-   "expire_s": 60,
-   "kind": "STATUS",
-   "call": null,
-   "route_pos": null,
-   "text": "Incident command: report your vehicle status.",
-   "fields": [
-    {
-     "name": "battery_pct",
-     "label": "Battery %",
-     "type": "number",
-     "min": 0,
-     "max": 100
-    },
-    {
-     "name": "condition_pct",
-     "label": "Condition %",
-     "type": "number",
-     "min": 0,
-     "max": 100
     }
    ]
   }
