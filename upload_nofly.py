@@ -1,9 +1,14 @@
 """
-Upload no-fly zones (PX4 geofence exclusion areas) from scenario.json ("no_fly_zones").
-They appear on QGroundControl's map and in its Plan > Fence tab.
+Upload no-fly zones (PX4 geofence exclusion areas) to PX4 so they appear on the
+researcher's QGroundControl map (Plan > Fence tab).
+
+Source: when session.json names a call set, calls/nofly/<SET>.json (the zones the
+Condition monitor, the agent and the projector minimap use); otherwise the legacy
+"no_fly_zones" in scenario.json. --set X overrides.
 
 Usage (simulation running):
-    python3 upload_nofly.py            # upload zones from scenario.json
+    python3 upload_nofly.py            # upload the zones of the session's call set
+    python3 upload_nofly.py --set B    # a given set
     python3 upload_nofly.py --dry-run  # show what would be uploaded, no connection
     python3 upload_nofly.py --clear    # remove all zones from the vehicle
 
@@ -18,8 +23,26 @@ import time
 os.environ["MAVLINK20"] = "1"   # fence uploads need MAVLink 2 (mission_type field)
 from pymavlink import mavutil
 
-PATH = os.environ.get("UAV_SCENARIO", os.path.expanduser("~/UAV-Triage/scenario.json"))
-ZONES = json.load(open(PATH)).get("no_fly_zones", {})
+REPO = os.path.expanduser(os.environ.get("UAV_REPO", "~/UAV-Triage"))
+PATH = os.environ.get("UAV_SCENARIO", os.path.join(REPO, "scenario.json"))
+SET = sys.argv[sys.argv.index("--set") + 1] if "--set" in sys.argv else None
+if SET is None:
+    try:
+        SET = json.load(open(os.environ.get("UAV_SESSION", os.path.join(REPO, "session.json"))))["block"].get("call_set")
+    except Exception:
+        SET = None
+if SET:
+    nf = os.path.join(REPO, "calls", "nofly", f"{SET}.json")
+    try:
+        ZONES = {"circles": [{"name": f'{z["id"]} {z["name"]}', "radius_m": z["radius_m"], "lat": z["lat"], "lon": z["lon"]}
+                             for z in json.load(open(nf))["zones"]]}
+        print(f"Call set {SET}: zones from {nf}")
+    except FileNotFoundError:
+        print(f"Call set {SET}: no {nf}; uploading no zones")
+        ZONES = {}
+else:
+    ZONES = json.load(open(PATH)).get("no_fly_zones", {})
+    print(f"No call set: zones from {PATH}")
 FENCE = mavutil.mavlink.MAV_MISSION_TYPE_FENCE
 FRAME = mavutil.mavlink.MAV_FRAME_GLOBAL
 
@@ -37,6 +60,8 @@ for p in ZONES.get("polygons", []):
                       float(len(pts)), lat, lon, f'polygon "{p["name"]}" vertex {i+1}/{len(pts)}'))
 
 print(f"{len(items)} fence items:")
+if not items and "--clear" not in sys.argv:
+    sys.argv.append("--clear")          # nothing to show: make sure old zones are removed
 for i, (_, _, lat, lon, desc) in enumerate(items):
     print(f"  {i:2d}  {lat:.6f}, {lon:.6f}  {desc}")
 if "--dry-run" in sys.argv:
