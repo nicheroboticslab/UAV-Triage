@@ -76,7 +76,24 @@ def truth_for(meta_path, set_id):
         cs = (m.get("call_set") or {}).get("content")
     if cs is None and set_id:
         cs = json.load(open(os.path.join(REPO, "calls", "sets", f"{set_id}.json")))
-    return {c["call_id"]: c for c in (cs or {}).get("calls", [])}
+    out = {c["call_id"]: json.loads(json.dumps(c)) for c in (cs or {}).get("calls", [])}
+    sid = set_id or (cs or {}).get("set_id")
+    try:
+        ov = json.load(open(os.path.join(REPO, "calls", "key_overrides.json"))).get(sid, {})
+    except FileNotFoundError:
+        ov = {}
+    for cid, fix in ov.items():                  # answer-key corrections (calls/key_overrides.json)
+        if cid not in out:
+            continue
+        for k, v in fix.items():
+            if k.startswith("_"):
+                continue
+            if k == "worst":
+                out[cid].setdefault("condition", {})["worst"] = v
+            else:
+                out[cid]["truth"][k] = v
+        out[cid]["key_override"] = {k: v for k, v in fix.items() if not k.startswith("_")}
+    return out
 
 
 def seg_dist(px, py, ax, ay, bx, by):

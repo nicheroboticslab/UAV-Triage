@@ -194,7 +194,10 @@ class ControllerInput:
                 n.loitering = False
             n.manual_yaw = start_yaw
             cur = list(n.current_pos)
-            n.target_pos[0], n.target_pos[1], n.target_pos[2] = cur[0], cur[1], cur[2]
+            n.target_pos[0], n.target_pos[1] = cur[0], cur[1]
+            # auto-launch (Ben 24 Oct): before control is live keep the 5 m launch height
+            live = getattr(n, "_control_live", lambda: True)()
+            n.target_pos[2] = cur[2] if live else min(cur[2], n.target_pos[2])
             self._v = [0.0, 0.0]
             self._vz = 0.0
             self._burst = True
@@ -388,7 +391,10 @@ class ControllerInput:
             n.manual_vel = None
         if hasattr(n, "current_pos") and hasattr(n, "target_pos") and self._in_manual():
             cur = list(n.current_pos)
-            n.target_pos[0], n.target_pos[1], n.target_pos[2] = cur[0], cur[1], cur[2]
+            n.target_pos[0], n.target_pos[1] = cur[0], cur[1]
+            # auto-launch (Ben 24 Oct): before control is live keep the 5 m launch height
+            live = getattr(n, "_control_live", lambda: True)()
+            n.target_pos[2] = cur[2] if live else min(cur[2], n.target_pos[2])
 
     def _stop_session(self):
         """Run tools/stop_session.sh detached: it SIGINTs the pilot (this process),
