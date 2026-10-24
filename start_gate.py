@@ -1,18 +1,17 @@
 """
-Start gate: waits until the pilot presses START on the controller, or Enter
-in this terminal, then exits; the launcher then creates /tmp/uav_start_signal,
+Start gate: waits until the pilot presses START on the controller (no keyboard
+start: Ben, 23 Oct), then exits; the launcher then creates /tmp/uav_start_signal,
 which the already-running pilot script is waiting for.
 
-Works without a controller (Enter only). Doesn't need window focus for the
+Doesn't need window focus for the
 controller button.
 
 Usage:
-    python3 start_gate.py            # wait for START or Enter
+    python3 start_gate.py            # wait for START on the controller
     python3 start_gate.py --detect   # print the number of every button pressed
                                      # (use this to confirm which one is Start)
 """
 import os
-import select
 import sys
 import time
 
@@ -31,38 +30,54 @@ detect = "--detect" in sys.argv
 
 pygame.display.init()
 pygame.joystick.init()
-pads = [pygame.joystick.Joystick(i) for i in range(pygame.joystick.get_count())]
-for p in pads:
-    p.init()
+pads = []
 
+
+def scan():
+    """(Re)attach controllers; called at start and every RESCAN_S while none is attached."""
+    global pads
+    pygame.joystick.quit()
+    pygame.joystick.init()
+    pads = [pygame.joystick.Joystick(i) for i in range(pygame.joystick.get_count())]
+    for p in pads:
+        p.init()
+    return pads
+
+
+RESCAN_S = 1.0
+scan()
 if pads:
     print(f"Controller found: {pads[0].get_name()}")
 else:
-    print("No controller found — keyboard only.")
+    print("No controller found yet — plug it in (checked every second).")
 
 if detect:
     print("Press controller buttons to see their numbers. Ctrl+C to exit.")
 else:
-    who = "START on the controller, or Enter here" if pads else "Enter here"
-    print(f">>> Press {who} to START the mission (drone arms and takes off ~6 s later; control is live once airborne)")
+    print(">>> Press START on the controller to START the mission "
+          "(drone arms and takes off ~6 s later; control is live once airborne)")
 sys.stdout.flush()
 
+next_scan = time.time() + RESCAN_S
 try:
     while True:
+        if not pads and time.time() >= next_scan:
+            next_scan = time.time() + RESCAN_S
+            if scan():
+                print(f"Controller connected: {pads[0].get_name()}")
+                sys.stdout.flush()
         for ev in pygame.event.get():
-            if ev.type == pygame.JOYBUTTONDOWN:
+            if ev.type == getattr(pygame, "JOYDEVICEREMOVED", -1):
+                print("Controller disconnected — waiting for it.")
+                sys.stdout.flush()
+                pads = []
+            elif ev.type == pygame.JOYBUTTONDOWN:
                 if detect:
                     print(f"  button {ev.button}")
                     sys.stdout.flush()
                 elif ev.button == START_BUTTON:
                     print("START pressed on controller.")
                     sys.exit(0)
-        if not detect:
-            ready, _, _ = select.select([sys.stdin], [], [], 0)
-            if ready:
-                sys.stdin.readline()
-                print("START pressed (keyboard).")
-                sys.exit(0)
         time.sleep(0.02)
 except KeyboardInterrupt:
     print("\nStart cancelled.")
