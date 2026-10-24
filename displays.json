@@ -1,5 +1,5 @@
 {
-  "_help": "Monitor per participant window: number in `xrandr --listmonitors` order (1 = first) or an output name such as \"HDMI-1\". Check with: python3 tools/displays.py",
-  "portal": 2,
-  "camera": 4
+  "_help": "Monitor per participant window: number in `xrandr --listmonitors` order (1 = first), an output name such as \"HDMI-1\", or \"leftN\" = N-th monitor from the left. Check with: python3 tools/displays.py Also \"leftmost\" / \"rightmost\" (Ben 24 Oct: portal = far left, camera = far right in Displays settings).",
+  "portal": "leftmost",
+  "camera": "rightmost"
 }

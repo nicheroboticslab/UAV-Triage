@@ -24,6 +24,8 @@ import os
 import time
 from datetime import datetime
 
+from log_time import stamped
+
 PORTAL_STATE_FILE = "/tmp/uav_portal_state.json"
 
 
@@ -53,7 +55,7 @@ class InactionLog:
 
     def _write(self, record):
         with open(self.filepath, "a") as f:
-            f.write(json.dumps(record) + "\n")
+            f.write(json.dumps(stamped(record)) + "\n")
 
     def _read_portal(self, now):
         if now - self._portal_read >= 0.5:

@@ -3,7 +3,9 @@
 EGLe camera window for the projector (E3, C2, E7, E1).
 
 Shows the drone's gimbal camera from Gazebo full-screen, with
-  - the rain look (C2): static darkening plus a fixed, low-contrast rain overlay;
+  - the rain look (C2): static darkening plus low-contrast rain streaks that fall
+    smoothly (Ben, 24 Oct); constant streak count and alpha, so overall brightness
+    never changes between frames (E7: no flicker);
   - a status strip (E1): EGLe state (who is flying), the agent's current decision
     as a fixed label while it flies (intent + target call, never free-text
     reasoning), battery %, flight time; from /tmp/uav_dashboard_state.json;
@@ -51,7 +53,7 @@ DRONE = "egle_drone"
 
 DARKEN_ALPHA = 70        # 0-255, overall dimming for overcast/rain
 RAIN_STREAKS = 900
-RAIN_ALPHA = 38          # low contrast
+RAIN_ALPHA = 110         # projector washes out faint streaks (Ben 24 Oct); constant, no flicker
 
 # Minimap
 MAP_FRAC = 0.42          # inset side as a fraction of the window height
@@ -116,6 +118,47 @@ def read_state():
 
 
 # ---------------------------------------------------------------- rain look
+RAIN_FALL_PX_S = 0.15     # fall speed, in screen heights per second (slow)
+RAIN_SLANT = 0.12         # horizontal drift per unit of fall (wind)
+
+
+class Rain:
+    """Moving rain: fixed set of streaks (seeded, identical every run) that fall and
+    wrap around. Darkening is a separate static layer. No random flashes, no change
+    in streak count or alpha, so mean brightness is constant (photosensitivity)."""
+
+    def __init__(self, size):
+        self.size = size
+        w, h = size
+        rnd = random.Random(20261023)
+        self.drops = [[rnd.uniform(0, w), rnd.uniform(0, h), rnd.uniform(15, 35), rnd.uniform(0.8, 1.2)]
+                      for _ in range(RAIN_STREAKS)]
+        self.dark = pygame.Surface(size, pygame.SRCALPHA)
+        self.dark.fill((10, 12, 18, DARKEN_ALPHA))
+        self.layer = pygame.Surface(size, pygame.SRCALPHA)
+        self.t = time.time()
+
+    def draw(self, screen):
+        w, h = self.size
+        now = time.time()
+        dt = min(0.1, now - self.t)
+        self.t = now
+        self.layer.fill((0, 0, 0, 0))
+        col = (200, 205, 215, RAIN_ALPHA)
+        for d in self.drops:
+            dy = RAIN_FALL_PX_S * h * d[3] * dt
+            d[1] += dy
+            d[0] -= dy * RAIN_SLANT
+            if d[1] > h + 25:
+                d[1] -= h + 50
+            if d[0] < -10:
+                d[0] += w + 20
+            x, y, ln = d[0], d[1], d[2]
+            pygame.draw.line(self.layer, col, (x, y), (x - ln * RAIN_SLANT, y + ln), 2)
+        screen.blit(self.layer, (0, 0))
+        screen.blit(self.dark, (0, 0))
+
+
 def rain_overlay(size):
     rnd = random.Random(20261023)            # fixed seed: identical every run
     surf = pygame.Surface(size, pygame.SRCALPHA)
@@ -457,9 +500,9 @@ def main():
             img = pygame.image.frombuffer(data[: w * h * 3], (w, h), "RGB")
             screen.blit(pygame.transform.smoothscale(img, (sw, sh)), (0, 0))
             if overlay_size != (sw, sh):
-                overlay, overlay_size = rain_overlay((sw, sh)), (sw, sh)
+                overlay, overlay_size = Rain((sw, sh)), (sw, sh)
                 status_font = pygame.font.SysFont("dejavusans", max(16, sh // 32), bold=True)
-            screen.blit(overlay, (0, 0))
+            overlay.draw(screen)
         else:
             screen.fill((20, 22, 26))
             if status_font is None:

@@ -8,7 +8,8 @@ screen 4 = camera + minimap).
 
 Monitors are numbered 1, 2, 3, ... in the order `xrandr --listmonitors` reports
 them. displays.json (repo root) maps a role to a monitor number or to an output
-name (e.g. "HDMI-1"; more robust if the order ever changes):
+name (e.g. "HDMI-1"; more robust if the order ever changes), or "leftN" for the
+N-th monitor from the left:
     {"portal": 2, "camera": 4}
 If the monitor is not connected, geom prints nothing and exits 1; the window then
 opens wherever the window manager puts it.
@@ -46,8 +47,19 @@ def config():
 
 
 def find(role):
+    """Role -> monitor. Accepts a number in xrandr order (2), an output name ("HDMI-1"),
+    "leftN": the N-th monitor counting from the left of the desktop ("left4"),
+    or "leftmost" / "rightmost"."""
     want = config().get(role)
-    for m in monitors():
+    mons = monitors()
+    if isinstance(want, str) and want.lower() in ("leftmost", "rightmost"):
+        by_x = sorted(mons, key=lambda m: (m["x"], m["y"]))
+        return (by_x[0] if want.lower() == "leftmost" else by_x[-1]) if by_x else None
+    if isinstance(want, str) and want.lower().startswith("left") and want[4:].isdigit():
+        by_x = sorted(mons, key=lambda m: (m["x"], m["y"]))
+        k = int(want[4:]) - 1
+        return by_x[k] if 0 <= k < len(by_x) else None
+    for m in mons:
         if want == m["n"] or (isinstance(want, str) and want == m["name"]):
             return m
     return None
@@ -66,7 +78,7 @@ def main():
     if not mons:
         sys.exit("xrandr found no monitors (not an X11 session?)")
     for m in mons:
-        r = [k for k, v in roles.items() if v in (m["n"], m["name"])]
+        r = [k for k in roles if (find(k) or {}).get("name") == m["name"]]
         print(f'{m["n"]}: {m["name"]:10s} {m["w"]}x{m["h"]}+{m["x"]}+{m["y"]}  {", ".join(r)}')
     for k, v in roles.items():
         if not find(k):

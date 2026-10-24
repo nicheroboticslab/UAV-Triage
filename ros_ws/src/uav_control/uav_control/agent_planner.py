@@ -41,6 +41,9 @@ DEFAULTS = {
     "min_hold_s": 5.0,           # call already reported when the agent arrives: brief look, then go
     "return_margin_pct": 3.0,    # battery kept on top of the cost to fly home
     "arrive_radius_m": 25.0,     # a call counts as visited when the vehicle is this close
+    "leg_climb_m": 35.0,         # each leg: climb from call altitude (10 m) to transit (45 m) and back down
+    "climb_ms": 5.0,             # vertical speeds for that climb / descent (PX4 caps 6 up / 5 down; less for acceleration)
+    "descent_ms": 4.0,
     "hold_radius_m": 150.0,      # takeover within this distance of an unreported call: hold for the report
                                  # (same radius as the portal's active call)
 }
@@ -68,6 +71,8 @@ class Energy:
         self.pct_per_s_hover = pm.level(0.0) / 3600.0 / e * 100.0
         g = batt_cfg["gate"]
         self.reserve = float(g.get("reserve_pct") or 0.0)
+        self.e_wh = e
+        self.mass = batt_cfg["vehicle"]["mass_kg"]
         self.per100 = float(g.get("reserve_pct_per_100m", 1.0))
 
     def after_flight(self, pct, metres):
@@ -79,6 +84,13 @@ class Energy:
 
     def after_hover(self, pct, seconds):
         return pct - seconds * self.pct_per_s_hover   # hover drains at the model rate in reserve too
+
+    def after_climb(self, pct, climb_m, climb_ms, descent_ms):
+        """Climb to transit altitude and descend at the goal: potential energy (m g h, as in
+        the battery model) plus hover power for the vertical time."""
+        wh = self.mass * 9.81 * climb_m / 3600.0
+        t = climb_m / climb_ms + climb_m / descent_ms
+        return pct - wh / self.e_wh * 100.0 - t * self.pct_per_s_hover, t
 
     def home_cost(self, pct, metres):
         return pct - self.after_flight(pct, metres)
@@ -117,7 +129,8 @@ class Planner:
                 t, pct, val, here = elapsed_s, battery_pct, 0.0, pos_en
                 for x in perm:
                     d = self.length(here, (x["e"], x["n"]))
-                    t += d / c["cruise_ms"]
+                    pct, tv = self.energy.after_climb(pct, c["leg_climb_m"], c["climb_ms"], c["descent_ms"])
+                    t += d / c["cruise_ms"] + tv
                     pct = self.energy.after_flight(pct, d)
                     w = float(c["rank_weights"].get(str(x["rank"]), 1.0))
                     val += w * 0.5 ** ((t - elapsed_s) / c["half_life_s"])
@@ -125,7 +138,8 @@ class Planner:
                     pct = self.energy.after_hover(pct, c["hold_est_s"])
                     here = (x["e"], x["n"])
                 d_home = self.length(here, home)
-                end = self.energy.after_flight(pct, d_home)
+                end, _ = self.energy.after_climb(pct, c["leg_climb_m"], c["climb_ms"], c["descent_ms"])
+                end = self.energy.after_flight(end, d_home)
                 if end < c["return_margin_pct"]:
                     continue
                 key = (round(val, 6), -(t - elapsed_s))

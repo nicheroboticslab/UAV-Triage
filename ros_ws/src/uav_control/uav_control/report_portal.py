@@ -46,6 +46,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import call_sets  # noqa: E402
+from log_time import stamped  # noqa: E402
 
 REPO = os.path.expanduser(os.environ.get("UAV_REPO", "~/UAV-Triage"))
 DATASET = os.path.expanduser(os.environ.get("UAV_DATASET", "~/uav_dataset"))
@@ -126,10 +127,9 @@ class Portal:
     def _w(self, f, rec):
         if f is None:
             return
-        now = time.time()
-        rec.setdefault("wall", now)
+        rec = stamped(rec)
         if self.t0:
-            rec.setdefault("t_s", round(now - self.t0, 3))
+            rec.setdefault("t_s", round(rec["wall"] - self.t0, 3))
         f.write(json.dumps(rec) + "\n")
         f.flush()
 

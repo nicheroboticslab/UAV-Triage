@@ -155,6 +155,8 @@ cat > "$TAB_DIR/6_camera.sh" << EOF
 export UAV_TAB_SESSION="$SESSION_ID"; echo \$\$ >> "$TAB_DIR/session_pids"
 # Camera + minimap on the camera monitor (displays.json, default screen 4)
 export UAV_CAMERA_GEOM="\$(python3 "$REPO_DIR/tools/displays.py" geom camera)"
+# the window manager may ignore the SDL position: move it with wmctrl/xdotool as for the portal
+bash "$REPO_DIR/tools/place_window.sh" "EGLe Camera" camera > "$LOG_DIR/camera_place.log" 2>&1 &
 python3 "$REPO_DIR/ros_ws/src/uav_control/uav_control/camera_view.py"
 exec bash
 EOF
