@@ -113,12 +113,50 @@ LOITER_OMEGA                 = 0.3    # rad/s  (~21s per orbit)
 # at MPC_XY_VEL_MAX (set_px4_params.py).
 AGENT_CRUISE_MS              = 14.0
 AGENT_ACCEL_MS2              = 2.5    # carrot speed ramp up/down (m/s^2)
+def _make_tone():
+    import struct, wave
+    rate = 44100
+    n = int(rate * TONE_S)
+    fade = int(rate * 0.01)
+    with wave.open(TONE_FILE, "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate)
+        frames = bytearray()
+        for i in range(n):
+            env = min(1.0, i / fade, (n - 1 - i) / fade)
+            frames += struct.pack("<h", int(32767 * TONE_GAIN * env * math.sin(2 * math.pi * TONE_HZ * i / rate)))
+        w.writeframes(bytes(frames))
+
+
+def play_takeover_tone():
+    """Non-blocking; paplay (PulseAudio/PipeWire) or aplay (ALSA). Returns the player used."""
+    if not TAKEOVER_TONE:
+        return None
+    try:
+        if not os.path.exists(TONE_FILE):
+            _make_tone()
+        for player in ("paplay", "aplay"):
+            try:
+                subprocess.Popen([player, TONE_FILE], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return player
+            except FileNotFoundError:
+                continue
+    except Exception:
+        pass
+    return None
+
+
 def _null(v):
     """Dataset records: the pilot uses the string "None" internally; log JSON null."""
     return None if v in (None, "None") else v
 
 
 AGENT_YAW_RATE               = 45.0   # deg/s, agent turning toward its travel direction
+# Takeover tone (Experiment Design rec. 4, 24 Oct): one short, non-repeating tone each
+# time the agent takes over; none when control returns to the operator. Played here,
+# at the takeover itself, so its time is exact (MSRT starts from a known cue).
+TAKEOVER_TONE                = os.environ.get("UAV_TAKEOVER_TONE", "1") != "0"
+TONE_HZ, TONE_S, TONE_GAIN   = 880.0, 0.35, 0.30      # moderate volume; 10 ms fades, no click
+TONE_FILE                    = "/tmp/egle_takeover_tone.wav"
 CONTROL_LIVE_ALT_M           = 2.0    # operator control (and tau) starts above this after take-off
 START_SIGNAL_FILE            = "/tmp/uav_start_signal"   # created by start_gate.py on START
 RETURN_REASONS               = ("emergency_return", "battery_gate")
@@ -1354,6 +1392,9 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
         # ---- Signal loss / regain detection ----
         if comm_loss and not self.signal_was_lost:
             self.inaction.mark_takeover(now)
+            player = play_takeover_tone()
+            self.log_event(f"Takeover tone {'played (' + player + ')' if player else 'NOT played'} at "
+                           f"{now - self.flight_start_time:.2f} s.")
             self.signal_was_lost      = True
             self.signal_lost_time     = now
             self.signal_lost_battery  = self.battery_pct
