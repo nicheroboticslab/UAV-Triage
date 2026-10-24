@@ -136,6 +136,16 @@ def draw_dashboard(stdscr, state: dict):
     put(row, 11, battery_bar(battery_pct), batt_color, bold=battery_crit)
     put(row, W - 1, "║", 5); row += 1
 
+    # Condition row (G1): vehicle damage; red inside a no-fly zone
+    cond = state.get("condition_pct")
+    if cond is not None:
+        zone = state.get("nofly_zone")
+        c_color = 4 if (zone or cond <= 25) else (3 if cond <= 60 else 2)
+        put(row, 0, "║", 5)
+        put(row, 2, "Condit.: ", 1)
+        put(row, 11, battery_bar(cond) + (f"   IN NO-FLY ZONE: {zone}" if zone else ""), c_color, bold=bool(zone))
+        put(row, W - 1, "║", 5); row += 1
+
     # EKF row ("Signal: LOST" and loss count removed, E1)
     ekf_color  = 2 if ekf_ok else 4
     ekf_label  = f"{ekf_conf:.2f} {'✓ GOOD' if ekf_conf >= 0.75 else ('⚠ MOD' if ekf_conf >= 0.4 else '✗ CRIT')}"

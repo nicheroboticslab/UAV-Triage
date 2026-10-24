@@ -31,7 +31,7 @@ def show(pid, seq, rows):
 
 def write(block):
     cfg = json.load(open(SESSION)) if os.path.exists(SESSION) else {
-        "tau_levels_s": [5, 15, 25, 35], "episode_min_s": 1.0}
+        "tau_levels_s": [2, 5, 12, 30], "episode_min_s": 1.0}
     if not os.path.exists(os.path.join(SETS, f"{block['call_set']}.json")):
         sys.exit(f"Call set {block['call_set']} not found in calls/sets")
     cfg["block"] = block

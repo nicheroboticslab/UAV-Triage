@@ -16,7 +16,7 @@ h = sc["home"]
 if "--env" in sys.argv:
     print(f'export PX4_HOME_LAT={h["lat"]}')
     print(f'export PX4_HOME_LON={h["lon"]}')
-    print(f'export PX4_HOME_ALT={h.get("alt_m", 0)}')
+    print(f'export PX4_HOME_ALT={h.get("alt_m", 0) + h.get("roof_m", 0.0)}')   # pad on the roof
     sys.exit(0)
 
 if any(a in sys.argv for a in ("--pool", "--set", "--sets")):

@@ -33,7 +33,13 @@ def include(uri, name, x, y, z=0.0, yaw=0.0):
             f'<pose>{x:.2f} {y:.2f} {z:.2f} 0 0 {yaw:.3f}</pose><static>true</static></include>\n')
 
 
+SCENE_BOXES = []          # collidable boxes added by call scenes (for the Condition monitor)
+
+
 def box(name, x, y, z, sx, sy, sz, rgba, yaw=0.0, collide=True):
+    if collide:
+        SCENE_BOXES.append({"name": name, "x": round(x, 2), "y": round(y, 2), "z": round(z, 2),
+                            "sx": sx, "sy": sy, "sz": sz, "yaw": round(yaw, 3)})
     col = (f'<collision name="c"><geometry><box><size>{sx} {sy} {sz}</size></box></geometry></collision>'
            if collide else "")
     return (f'    <model name="{name}"><static>true</static><pose>{x:.2f} {y:.2f} {z:.2f} 0 0 {yaw:.3f}</pose>'
@@ -579,6 +585,7 @@ def load_offsets():
 GEO = os.path.join(REPO, "geo")
 DEFAULT_BLDG_H = 8.0
 LEVEL_H = 3.2
+ROOF_M = 0.0               # home pad height (scenario.json home.roof_m), set in world()
 HOME_CLEAR_M = 12.0        # drop any building within this distance of the takeoff point
 
 
@@ -613,7 +620,15 @@ def load_geo(home):
             if len(pts) < 3:
                 skipped["degenerate"] += 1
                 continue
-            if point_in_poly(0.0, 0.0, pts) or min(math.hypot(x, y) for x, y in pts) < HOME_CLEAR_M:
+            roof = float(home.get("roof_m") or 0.0)
+            if point_in_poly(0.0, 0.0, pts):
+                if roof > 0:            # Ben, 24 Oct: home pad is on this building's roof
+                    buildings.append({"id": el["id"], "pts": pts, "h": roof, "h_source": "home_roof",
+                                      "home": True})
+                    continue
+                skipped["home"] += 1
+                continue
+            if min(math.hypot(x, y) for x, y in pts) < HOME_CLEAR_M and roof <= 0:
                 skipped["home"] += 1
                 continue
             h = _num(tags.get("height"))
@@ -626,7 +641,12 @@ def load_geo(home):
             x, y = en(el["lat"], el["lon"])
             if math.hypot(x, y) >= HOME_CLEAR_M:
                 trees.append({"x": x, "y": y, "h": _num(tags.get("height")) or 10.0})
-    return {"meta": meta, "buildings": buildings, "trees": trees, "skipped": skipped}
+    # imagery tiles are positioned relative to the home used when geo/ was fetched;
+    # shift them if scenario.json home has moved since (rooftop pad, 24 Oct)
+    mh = meta.get("home", home)
+    off = en(mh["lat"], mh["lon"])
+    return {"meta": meta, "buildings": buildings, "trees": trees, "skipped": skipped,
+            "tile_offset": (round(off[0], 2), round(off[1], 2))}
 
 
 def point_in_poly(x, y, poly):
@@ -699,10 +719,11 @@ def place_clear(x, y, ext, buildings):
     return None
 
 
-def ground_tiles(meta):
+def ground_tiles(meta, offset=(0.0, 0.0)):
     out = ""
     for k, t in enumerate(meta["tiles"]):
-        cx, cy = t["east_min"] + t["size_m"] / 2, t["north_min"] + t["size_m"] / 2
+        cx = t["east_min"] + t["size_m"] / 2 + offset[0]
+        cy = t["north_min"] + t["size_m"] / 2 + offset[1]
         img = os.path.join(GEO, t["file"])
         out += (f'    <model name="ground_tile_{k}"><static>true</static><pose>{cx:.1f} {cy:.1f} 0.02 0 0 0</pose>'
                 f'<link name="l"><visual name="v"><geometry><plane><normal>0 0 1</normal>'
@@ -744,16 +765,36 @@ def trees_model(trees):
             + "".join(parts) + '</link></model>\n') if parts else ""
 
 
-def drone():
+def drone(roof=0.0):
     # EGLe drone: x500 with a mono camera pitched 45 degrees down, facing forward.
+    # Spawned on the home pad (on the roof when scenario.json home.roof_m > 0).
     return ('    <include><uri>model://egle_drone</uri><name>egle_drone</name>'
-            '<pose>0 0 0.25 0 0 0</pose></include>\n')
+            f'<pose>0 0 {roof + 0.25:.2f} 0 0 0</pose></include>\n')
+
+
+def pad(roof=0.0):
+    """Landing pad at home: 6 m dark disc with a white circle and an H, on the roof."""
+    if roof <= 0:
+        return ""
+    z = roof + 0.02
+    def vis(name, geom, x, y, rgba, dz=0.0):
+        return (f'<visual name="{name}"><pose>{x} {y} {z + dz:.3f} 0 0 0</pose><geometry>{geom}</geometry>'
+                f'<material><ambient>{rgba}</ambient><diffuse>{rgba}</diffuse></material></visual>')
+    v = (vis("disc", '<cylinder><radius>3.0</radius><length>0.02</length></cylinder>', 0, 0, "0.15 0.15 0.17 1")
+         + vis("ring", '<cylinder><radius>2.6</radius><length>0.022</length></cylinder>', 0, 0, "0.9 0.9 0.9 1", 0.001)
+         + vis("inner", '<cylinder><radius>2.35</radius><length>0.024</length></cylinder>', 0, 0, "0.15 0.15 0.17 1", 0.002)
+         + vis("h_l", '<box><size>0.35 2.4 0.026</size></box>', -0.7, 0, "0.95 0.95 0.95 1", 0.003)
+         + vis("h_r", '<box><size>0.35 2.4 0.026</size></box>', 0.7, 0, "0.95 0.95 0.95 1", 0.003)
+         + vis("h_m", '<box><size>1.4 0.35 0.026</size></box>', 0, 0, "0.95 0.95 0.95 1", 0.003))
+    return f'    <model name="home_pad"><static>true</static><link name="l">{v}</link></model>\n'
 
 
 def world(set_id):
     sc = json.load(open(os.path.join(REPO, "scenario.json")))
     cs, calls = call_sets.resolve(set_id, sc["home"], float(sc.get("cruise_alt_m", 10)))
     by_id = {c["call_id"]: c for c in cs["calls"]}
+    global ROOF_M
+    ROOF_M = float(sc["home"].get("roof_m") or 0.0)
     geo = load_geo(sc["home"])
     global building
     if geo:
@@ -831,7 +872,7 @@ def world(set_id):
       <visual name="visual"><geometry><plane><normal>0 0 1</normal><size>4000 4000</size></plane></geometry>
         <material><ambient>0.30 0.33 0.28 1</ambient><diffuse>0.30 0.33 0.28 1</diffuse></material></visual>
     </link></model>
-{ground_tiles(geo["meta"]) if geo else ""}{flood_sheet()}{buildings_model(geo["buildings"]) if geo else ""}{trees_model(geo["trees"]) if geo else ""}{drone()}{body}  </world>
+{ground_tiles(geo["meta"], geo["tile_offset"]) if geo else ""}{flood_sheet()}{buildings_model(geo["buildings"]) if geo else ""}{trees_model(geo["trees"]) if geo else ""}{pad(ROOF_M)}{drone(ROOF_M)}{body}  </world>
 </sdf>
 '''
     out = os.path.join(REPO, "worlds", f"{name}.sdf")
@@ -849,6 +890,23 @@ def world(set_id):
         print("No geo/ data: flat ground (run tools/fetch_geo.py)")
     json.dump({"world": name, "items": FLOW_ITEMS},
               open(os.path.join(REPO, "worlds", f"{name}_flow.json"), "w"), indent=1)
+    # Hazards for the pilot's Condition monitor and the projector minimap (G1/G4):
+    # no-fly zones (calls/nofly/<SET>.json), building footprints/heights and tree
+    # crowns exactly as built into this world.
+    nf_p = os.path.join(REPO, "calls", "nofly", f"{set_id}.json")
+    zones = json.load(open(nf_p))["zones"] if os.path.exists(nf_p) else []
+    # The home building (pad on its roof) is left out of the collision hazards: the
+    # vehicle sits on it at start and on landing.
+    hz = {"world": name, "zones": zones, "home_roof_m": ROOF_M,
+          "buildings": [{"id": b["id"], "h": round(b["h"], 1), "pts": [[round(x, 1), round(y, 1)] for x, y in b["pts"]]}
+                        for b in (geo["buildings"] if geo else []) if not b.get("home")],
+          "trees": [{"x": round(t["x"], 1), "y": round(t["y"], 1), "zc": round(t["h"] - 0.35 * t["h"], 1),
+                     "r": round(0.35 * t["h"], 1)} for t in (geo["trees"] if geo else [])],
+          "scene_boxes": SCENE_BOXES}
+    json.dump(hz, open(os.path.join(REPO, "worlds", f"{name}_hazards.json"), "w"))
+    print(f"Hazards: {len(zones)} no-fly zones, {len(hz['buildings'])} buildings, {len(hz['trees'])} trees, "
+          f"{len(SCENE_BOXES)} scene obstacles")
+
     if new_offsets and "TEST" in set_id.upper():
         print(f"Test set: new offsets not recorded ({', '.join(new_offsets)})")
     elif new_offsets:

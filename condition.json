@@ -1,0 +1,11 @@
+{
+  "_help": "Vehicle Condition model (G1/G4). Starts at 100 %; 0 % = vehicle lost, block ends. Read by uav_control/hazards.py.",
+  "impact_base_pct": 5.0,
+  "impact_per_ms_pct": 2.0,
+  "impact_max_pct": 60.0,
+  "scrape_pct_per_s": 2.0,
+  "ground_impact_ms": 3.0,
+  "nofly_pct_per_s": 4.0,
+  "drone_radius_m": 0.5,
+  "agent_nofly_margin_m": 35.0
+}
