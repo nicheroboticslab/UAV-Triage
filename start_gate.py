@@ -22,6 +22,15 @@ os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 
 import pygame
 
+# Focus-independent reader for /dev/input/js* (Ben, 24 Oct); SDL is the fallback.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "ros_ws/src/uav_control/uav_control"))
+try:
+    import js_joystick
+except ImportError:
+    js_joystick = None
+USE_JS = (js_joystick is not None and os.environ.get("UAV_JOY_BACKEND", "js") == "js"
+          and bool(js_joystick.devices()))
+
 # Xbox 360 on Linux usually reports Start as button 7 (A=0 B=1 X=2 Y=3 LB=4 RB=5 Back=6).
 # If Start doesn't work, run with --detect and put the number it prints here.
 START_BUTTON = int(os.environ.get("UAV_START_BUTTON", "7"))
@@ -49,14 +58,52 @@ scan()
 if pads:
     print(f"Controller found: {pads[0].get_name()}")
 else:
-    print("No controller found yet — plug it in (checked every second).")
+    print("No controller found yet — plug it in.")
 
 if detect:
     print("Press controller buttons to see their numbers. Ctrl+C to exit.")
 else:
-    print(">>> Press START on the controller to START the mission "
-          "(drone arms and takes off ~6 s later; control is live once airborne)")
+    print(">>> Press START on the controller to START the mission")
 sys.stdout.flush()
+
+def js_gate():
+    """Same behaviour as the SDL loop below, reading /dev/input/js* directly."""
+    j, prev, next_scan, said = None, [], 0.0, False
+    while True:
+        now = time.time()
+        if j is None or not j.get_init():
+            if j is not None:
+                print("Controller disconnected — waiting for it.")
+                sys.stdout.flush()
+                j = None
+            if now >= next_scan:
+                next_scan = now + RESCAN_S
+                j = js_joystick.open_first()
+                if j is not None:
+                    prev = [0] * j.get_numbuttons()
+                    print(f"Controller connected: {j.get_name()} ({j.path})")
+                    sys.stdout.flush()
+            time.sleep(0.05)
+            continue
+        cur = [j.get_button(i) for i in range(j.get_numbuttons())]
+        for b, (c, p) in enumerate(zip(cur, prev)):
+            if c and not p:
+                if detect:
+                    print(f"  button {b}")
+                    sys.stdout.flush()
+                elif b == START_BUTTON:
+                    print("START pressed on controller.")
+                    sys.exit(0)
+        prev = cur
+        time.sleep(0.02)
+
+
+if USE_JS:
+    try:
+        js_gate()
+    except KeyboardInterrupt:
+        print("\nStart cancelled.")
+        sys.exit(1)
 
 next_scan = time.time() + RESCAN_S
 try:

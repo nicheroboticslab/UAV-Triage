@@ -1,0 +1,5 @@
+{
+  "_help": "Monitor per participant window: number in `xrandr --listmonitors` order (1 = first) or an output name such as \"HDMI-1\". Check with: python3 tools/displays.py",
+  "portal": 2,
+  "camera": 4
+}

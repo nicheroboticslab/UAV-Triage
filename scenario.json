@@ -2,9 +2,11 @@
   "_help": "Edit this file to change the scenario. Coordinates are decimal degrees (Google Maps right-click -> copy). West longitude is negative. Relaunch after editing.",
   "home": {
     "name": "Lab",
-    "lat": 42.320278,
-    "lon": -83.234139,
-    "alt_m": 185
+    "lat": 42.320211,
+    "lon": -83.234536,
+    "alt_m": 185,
+    "roof_m": 8.0,
+    "_roof_note": "Ben 24 Oct: drone starts and lands on the roof of the Manufacturing Systems Engineering Lab (OSM way 58365864); home = roof centroid (moved 33 m W, 7 m S from 42.320278, -83.234139). alt_m = ground elevation; roof_m = roof height in the simulated world (OSM has no height tag: 8 m default). Altitudes in this file (cruise, transit, base) are above the ground at the call / above the pad for base; the pilot converts them."
   },
   "cruise_alt_m": 10,
   "transit_alt_m": 45,

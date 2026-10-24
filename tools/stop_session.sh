@@ -6,7 +6,7 @@
 
 REPO_DIR="$HOME/UAV-Triage"
 TAB_DIR="$REPO_DIR/logs/tab_scripts"
-PATTERN="px4|MicroXRCEAgent|QGroundControl|autonomous_uav|gz sim|camera_view|uav_dashboard|flow_animator"
+PATTERN="px4|MicroXRCEAgent|QGroundControl|autonomous_uav|gz sim|camera_view|uav_dashboard|flow_animator|report_portal|uav_portal_profile"
 
 echo "[stop] $(date '+%F %T') stopping session"
 
@@ -23,6 +23,12 @@ fi
 pkill -9 -f "$PATTERN"
 sleep 1
 
+# 2b. H6: archive this run (every logger is stopped now)
+python3 "$REPO_DIR/tools/archive_run.py" --latest || echo "[stop] archive failed (run tools/archive_run.py --pending later)"
+# 2c. Grade the archived run's reports and secondary tasks (J1 components)
+LATEST=$(ls -1 "$HOME/uav_dataset/runs" 2>/dev/null | sort | tail -1)
+[ -n "$LATEST" ] && python3 "$REPO_DIR/tools/grade_reports.py" "$HOME/uav_dataset/runs/$LATEST"
+
 # 3. Close the launcher's windows. Each window's shell recorded its PID and
 #    carries UAV_TAB_SESSION; only PIDs that still carry this session's id are
 #    closed, so a stale PID that now belongs to something else is never touched.
@@ -35,5 +41,5 @@ if [ -n "$SID" ] && [ -f "$TAB_DIR/session_pids" ]; then
         fi
     done < "$TAB_DIR/session_pids"
 fi
-rm -f /tmp/uav_dashboard_state.json /tmp/uav_start_signal
+rm -f /tmp/uav_dashboard_state.json /tmp/uav_start_signal /tmp/uav_portal_state.json
 echo "[stop] done"

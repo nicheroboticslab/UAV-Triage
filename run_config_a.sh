@@ -19,6 +19,9 @@ LOG_DIR="$REPO_DIR/logs"
 TAB_DIR="$LOG_DIR/tab_scripts"
 PX4_LOG="$LOG_DIR/px4_session.log"
 
+# H6: archive any earlier run that was not archived (e.g. stopped without Back-hold)
+python3 "$REPO_DIR/tools/archive_run.py" --pending
+
 # Optional: ./run_config_a.sh P07 3  -> session.json for participant P07, block 3 (H4,
 # tools/session_setup.py). Without arguments the existing session.json is used.
 if [ $# -ge 2 ]; then
@@ -34,6 +37,7 @@ if [ -z "$WORLD_SET" ]; then
     WORLD_SET="BASELINE"
 fi
 echo "Session: $SESSION_FILE | world / call set: $WORLD_SET"
+python3 "$REPO_DIR/tools/displays.py" || echo "WARNING: could not read monitor layout (windows open where the window manager puts them)"
 
 mkdir -p "$TAB_DIR"
 # Session id + window PIDs, used by tools/stop_session.sh (dashboard Q Q) to close
@@ -45,12 +49,12 @@ rm -f /tmp/uav_start_signal   # pilot script waits for this (START)
 > "$PX4_LOG"   # truncate any stale log so old "Ready for takeoff!" lines can't cause a false match
 
 echo "Checking for leftover processes from a previous run..."
-if pgrep -f "px4|MicroXRCEAgent|QGroundControl|autonomous_uav|gz sim|camera_view|flow_animator" > /dev/null; then
+if pgrep -f "px4|MicroXRCEAgent|QGroundControl|autonomous_uav|gz sim|camera_view|flow_animator|report_portal|uav_portal_profile" > /dev/null; then
     echo "WARNING: found existing related processes still running:"
-    ps aux | grep -E "px4|MicroXRCEAgent|QGroundControl|autonomous_uav|gz sim|camera_view|flow_animator" | grep -v grep
+    ps aux | grep -E "px4|MicroXRCEAgent|QGroundControl|autonomous_uav|gz sim|camera_view|flow_animator|report_portal|uav_portal_profile" | grep -v grep
     read -p "Kill them and continue? (y/N) " confirm
     if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
-        pkill -9 -f "px4|MicroXRCEAgent|QGroundControl|autonomous_uav|gz sim|camera_view|flow_animator"
+        pkill -9 -f "px4|MicroXRCEAgent|QGroundControl|autonomous_uav|gz sim|camera_view|flow_animator|report_portal|uav_portal_profile"
         sleep 2
     else
         echo "Aborted. Resolve manually, then rerun."
@@ -134,9 +138,23 @@ python3 ~/UAV-Triage/ros_ws/src/uav_control/uav_control/uav_dashboard.py
 exec bash
 EOF
 
+cat > "$TAB_DIR/7_portal.sh" << EOF
+#!/bin/bash
+export UAV_TAB_SESSION="$SESSION_ID"; echo \$\$ >> "$TAB_DIR/session_pids"
+echo -en "\033]0;7-Portal\a"
+python3 "$REPO_DIR/ros_ws/src/uav_control/uav_control/report_portal.py" &
+bash "$REPO_DIR/tools/open_portal.sh" > "$LOG_DIR/portal_browser.log" 2>&1 &
+# Portal on the portal monitor (displays.json, default screen 2)
+bash "$REPO_DIR/tools/place_window.sh" "EGLe Operator Station" portal >> "$LOG_DIR/portal_browser.log" 2>&1 &
+wait
+exec bash
+EOF
+
 cat > "$TAB_DIR/6_camera.sh" << EOF
 #!/bin/bash
 export UAV_TAB_SESSION="$SESSION_ID"; echo \$\$ >> "$TAB_DIR/session_pids"
+# Camera + minimap on the camera monitor (displays.json, default screen 4)
+export UAV_CAMERA_GEOM="\$(python3 "$REPO_DIR/tools/displays.py" geom camera)"
 python3 "$REPO_DIR/ros_ws/src/uav_control/uav_control/camera_view.py"
 exec bash
 EOF
@@ -175,7 +193,7 @@ echo "Uploading scenario to the map (from scenario.json)..."
 python3 "$REPO_DIR/upload_waypoints.py" > "$LOG_DIR/upload_waypoints.log" 2>&1 \
     && echo "  sector markers: OK" || echo "  sector markers: FAILED (see logs/upload_waypoints.log)"
 python3 "$REPO_DIR/upload_nofly.py" > "$LOG_DIR/upload_nofly.log" 2>&1 \
-    && echo "  no-fly zones:   OK" || echo "  no-fly zones:   FAILED (see logs/upload_nofly.log)"
+    && echo "  no-fly zones:   OK (call set $WORLD_SET)" || echo "  no-fly zones:   FAILED (see logs/upload_nofly.log)"
 echo ""
 
 echo ""
@@ -193,8 +211,9 @@ fi
 
 echo ""
 echo "=== Stage 3/3: Dashboard, camera, pilot script (waits for START) ==="
-rm -f /tmp/uav_dashboard_state.json   # don't show the previous run's state while waiting
+rm -f /tmp/uav_dashboard_state.json /tmp/uav_portal_state.json   # don't show the previous run's state while waiting
 gnome-terminal --window --title="Dashboard" -- bash "$TAB_DIR/5_dashboard.sh"
+gnome-terminal --window --title="7-Portal" -- bash "$TAB_DIR/7_portal.sh"
 gnome-terminal --window --title="6-Camera" -- bash "$TAB_DIR/6_camera.sh"
 gnome-terminal --window --title="4-Pilot-Script" -- bash "$TAB_DIR/4_pilot.sh"
 

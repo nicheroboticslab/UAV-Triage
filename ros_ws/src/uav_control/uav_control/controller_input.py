@@ -43,6 +43,14 @@ os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 os.environ.setdefault("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1")
 os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 import pygame
+try:
+    from . import js_joystick
+except ImportError:                 # run as a script / imported without the package
+    import js_joystick
+
+# Input backend (Ben, 24 Oct): read the controller from /dev/input/js* directly, so it
+# works whatever window has focus. UAV_JOY_BACKEND=sdl falls back to pygame/SDL.
+JOY_BACKEND = os.environ.get("UAV_JOY_BACKEND", "js")
 
 # ---- Xbox 360 on Linux (xpad driver); confirm with --detect ----
 AX_LEFT_X, AX_LEFT_Y = 0, 1
@@ -227,8 +235,10 @@ class ControllerInput:
         dz = t[2] - cur[2]
         if abs(dz) > LEASH_Z:
             t[2] = cur[2] + math.copysign(LEASH_Z, dz)
-        if t[2] > -MIN_ALT_M:
-            t[2] = -MIN_ALT_M
+        # never below MIN_ALT_M above the ground (local frame starts on the rooftop pad)
+        floor_z = getattr(n, "home_roof_m", 0.0) - MIN_ALT_M
+        if t[2] > floor_z:
+            t[2] = floor_z
         n.manual_vel = [self._v[0], self._v[1], -self._vz]
 
         stopped = not active and math.hypot(*self._v) < 0.05 and abs(self._vz) < 0.05
@@ -345,6 +355,14 @@ class ControllerInput:
 
     def _attach(self):
         """Open the first controller, or None."""
+        if JOY_BACKEND == "js" and js_joystick.devices():
+            j = js_joystick.open_first()
+            if j is None:
+                return None
+            self._log(f"[CONTROLLER] Connected: {j.get_name()} via {j.path} "
+                      f"({j.get_numaxes()} axes, {j.get_numbuttons()} buttons; focus-independent)")
+            self._event("controller_connected", j.get_name())
+            return j
         pygame.joystick.quit()
         pygame.joystick.init()
         if pygame.joystick.get_count() == 0:
@@ -416,9 +434,10 @@ class ControllerInput:
                     time.sleep(0.2)
                     continue
             removed = False
-            for ev in pygame.event.get():
-                if ev.type == getattr(pygame, "JOYDEVICEREMOVED", -1):
-                    removed = True
+            if not isinstance(j, js_joystick.JsJoystick):
+                for ev in pygame.event.get():
+                    if ev.type == getattr(pygame, "JOYDEVICEREMOVED", -1):
+                        removed = True
             try:
                 if removed or not j.get_init():
                     raise pygame.error("device removed")
@@ -454,8 +473,29 @@ def _detect():
         pass
 
 
+def _detect_js():
+    j = js_joystick.open_first()
+    if j is None:
+        sys.exit(f"No readable /dev/input/js* device ({js_joystick.devices() or 'none present'}).")
+    print(f"{j.get_name()} ({j.path}): {j.get_numaxes()} axes, {j.get_numbuttons()} buttons. Ctrl+C to exit.")
+    print("Same numbering as --detect should appear; move ONE control at a time.")
+    last = None
+    try:
+        while j.get_init():
+            axes = tuple(round(j.get_axis(i), 1) for i in range(j.get_numaxes()))
+            btns = [i for i in range(j.get_numbuttons()) if j.get_button(i)]
+            if (axes, tuple(btns)) != last:
+                print("axes " + " ".join(f"{i}:{v:+.1f}" for i, v in enumerate(axes)), "| buttons", btns)
+                last = (axes, tuple(btns))
+            time.sleep(0.05)
+    except KeyboardInterrupt:
+        pass
+
+
 if __name__ == "__main__":
-    if "--detect" in sys.argv:
+    if "--detect-js" in sys.argv:
+        _detect_js()
+    elif "--detect" in sys.argv:
         _detect()
     else:
         print(__doc__)

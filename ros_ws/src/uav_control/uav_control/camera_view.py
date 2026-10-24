@@ -11,8 +11,10 @@ Shows the drone's gimbal camera from Gazebo full-screen, with
     ("Block N complete / Please complete the questionnaire"; no score);
   - a minimap inset (layout option A, Ben 23 Oct): NAIP satellite imagery of
     the world (geo/naip), call pins (C1..C5, from worlds/egle_<SET>_scenes.json),
-    home, the drone with its heading and a track trail, north-up, scale bar.
+    home, no-fly zones (dark-red, radar-style; worlds/egle_<SET>_hazards.json),
+    the drone with its heading and a track trail, north-up, scale bar.
     D-pad up / down on the controller zooms in / out.
+  - Condition (vehicle damage, G1) next to the battery; red while inside a no-fly zone.
 E7: nothing flashes; state changes are colour/text changes only.
 
 Reads Gazebo directly (gz-transport13 Python bindings; no ROS bridge, no OpenCV):
@@ -34,6 +36,10 @@ from collections import deque
 os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 os.environ.setdefault("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1")
 import pygame  # noqa: E402
+try:
+    import js_joystick  # noqa: E402  (focus-independent D-pad zoom, Ben 24 Oct)
+except ImportError:
+    js_joystick = None
 from gz.msgs10.image_pb2 import Image  # noqa: E402
 from gz.msgs10.pose_v_pb2 import Pose_V  # noqa: E402
 from gz.transport13 import Node  # noqa: E402
@@ -49,13 +55,14 @@ RAIN_ALPHA = 38          # low contrast
 
 # Minimap
 MAP_FRAC = 0.42          # inset side as a fraction of the window height
-MAP_SPANS_M = [300, 600, 1200, 2400]     # zoom levels: metres across the inset
-MAP_DEFAULT = 2
+MAP_SPANS_M = [500, 1000, 2000, 3000]    # zoom levels: metres across the inset
+MAP_DEFAULT = 2                          # 2000 m across = 1 km radius around the drone (Ben, 24 Oct)
 DPAD_UP, DPAD_DOWN = 13, 14              # Ben's pad (controller_input.py --detect)
 TRAIL_DT_S, TRAIL_MAX = 0.5, 720         # trail point every 0.5 s, last 6 min
 MAP_RGB = {"pin": (255, 196, 0), "pin_txt": (20, 20, 20), "home": (255, 255, 255),
            "drone": (0, 220, 255), "trail": (0, 200, 255), "frame": (210, 210, 210),
-           "bg": (25, 28, 32)}
+           "bg": (25, 28, 32), "nfz_fill": (130, 0, 0, 115), "nfz_rim": (200, 25, 25),
+           "nfz_txt": (255, 170, 160)}
 
 STATE_RGB = {"MANUAL": (80, 220, 100), "AUTONOMOUS": (60, 200, 255), "RETURNING": (255, 200, 60),
              "HOLD": (220, 120, 255), "LANDED": (200, 200, 200)}
@@ -133,12 +140,23 @@ class MiniMap:
         self.trail = deque(maxlen=TRAIL_MAX)
         self.last_trail = 0.0
         self.pins = []
+        self.zones = []
         try:
             meta = json.load(open(os.path.join(REPO, "geo", "geo_meta.json")))
         except Exception as e:
             print(f"[map] no geo data ({e}); minimap disabled")
             return
         tiles = meta["tiles"]
+        # tiles are relative to the home used when geo/ was fetched; shift them if
+        # scenario.json home has moved since (rooftop pad, 24 Oct)
+        try:
+            h = json.load(open(os.path.join(REPO, "scenario.json")))["home"]
+            gh = meta.get("home", h)
+            m_lon = 111320.0 * math.cos(math.radians(h["lat"]))
+            off_e, off_n = (gh["lon"] - h["lon"]) * m_lon, (gh["lat"] - h["lat"]) * 111320.0
+        except Exception:
+            off_e = off_n = 0.0
+        tiles = [dict(t, east_min=t["east_min"] + off_e, north_min=t["north_min"] + off_n) for t in tiles]
         self.e0 = min(t["east_min"] for t in tiles)
         self.n1 = max(t["north_min"] + t["size_m"] for t in tiles)
         e1 = max(t["east_min"] + t["size_m"] for t in tiles)
@@ -159,9 +177,13 @@ class MiniMap:
             self.pins = sorted((cid, v["pin_en"][0], v["pin_en"][1]) for cid, v in scenes.items())
         except Exception as e:
             print(f"[map] no call pins ({e})")
+        try:
+            self.zones = json.load(open(os.path.join(REPO, "worlds", f"{world}_hazards.json"))).get("zones", [])
+        except Exception as e:
+            print(f"[map] no no-fly zones ({e})")
         self.font = None
         self.ok = True
-        print(f"[map] {len(tiles)} imagery tiles, {len(self.pins)} call pins")
+        print(f"[map] {len(tiles)} imagery tiles, {len(self.pins)} call pins, {len(self.zones)} no-fly zones")
 
     def zoom(self, d):
         self.span_i = max(0, min(len(MAP_SPANS_M) - 1, self.span_i + d))
@@ -199,6 +221,21 @@ class MiniMap:
         if self.font is None or self.font_side != side:
             self.font = pygame.font.SysFont("dejavusans", max(13, side // 24), bold=True)
             self.font_side = side
+        # no-fly zones: translucent dark red, darker rim, radar-style range ring
+        if self.zones:
+            lay = pygame.Surface((side, side), pygame.SRCALPHA)
+            for z in self.zones:
+                zx, zy = to_px(z["east_m"], z["north_m"])
+                zr = max(3, int(z["radius_m"] * k))
+                if zx + zr < 0 or zx - zr > side or zy + zr < 0 or zy - zr > side:
+                    continue
+                pygame.draw.circle(lay, MAP_RGB["nfz_fill"], (zx, zy), zr)
+                pygame.draw.circle(lay, MAP_RGB["nfz_rim"] + (230,), (zx, zy), zr, max(2, side // 220))
+                if zr > 10:
+                    pygame.draw.circle(lay, MAP_RGB["nfz_rim"] + (140,), (zx, zy), int(zr * 0.6), 1)
+                    pygame.draw.line(lay, MAP_RGB["nfz_rim"] + (140,), (zx - zr, zy), (zx + zr, zy), 1)
+                    pygame.draw.line(lay, MAP_RGB["nfz_rim"] + (140,), (zx, zy - zr), (zx, zy + zr), 1)
+            view.blit(lay, (0, 0))
         # trail
         if len(self.trail) > 1:
             pts = [to_px(e, n) for e, n in self.trail]
@@ -237,8 +274,7 @@ class MiniMap:
                        (ex + rr * math.cos(ang - 2.4), ey + rr * math.sin(ang - 2.4))]
                 pygame.draw.polygon(view, MAP_RGB["pin"], tri)
                 pygame.draw.polygon(view, (0, 0, 0), tri, 1)
-                dist = math.hypot(e - ce, n - cn)
-                label(f"{cid} {dist:.0f} m", ex - 1.8 * rr * math.cos(ang) - 30, ey - 1.8 * rr * math.sin(ang) - 8)
+                label(cid, ex - 1.8 * rr * math.cos(ang) - 30, ey - 1.8 * rr * math.sin(ang) - 8)
         # drone (arrow along heading; yaw is ENU: 0 = east, counter-clockwise)
         if pose and yaw is None:                          # fallback feed has no heading
             pygame.draw.circle(view, MAP_RGB["drone"], to_px(ce, cn), max(6, side // 45))
@@ -284,11 +320,23 @@ def draw_status(screen, state, font):
     t = font.render(txt, True, col)
     pygame.draw.rect(screen, col, pygame.Rect(12, 8, 10, h - 16))
     screen.blit(t, (30, 8))
+    parts = []
     if "battery_pct" in state:
         b = state["battery_pct"]
         bcol = (255, 90, 80) if b <= 5 else ((255, 200, 60) if state.get("battery_low") else (230, 230, 230))
-        t = font.render(f"Battery {b:.0f} %", True, bcol)
-        screen.blit(t, (sw // 2 - t.get_width() // 2, 8))
+        parts.append((f"Battery {b:.0f} %", bcol))
+    c = state.get("condition_pct")
+    if c is not None:
+        if state.get("nofly_zone"):
+            parts.append((f"Condition {c:.0f} %  ·  IN NO-FLY ZONE", (255, 90, 80)))
+        else:
+            parts.append((f"Condition {c:.0f} %", (255, 90, 80) if c <= 25 else ((255, 200, 60) if c <= 60 else (230, 230, 230))))
+    if parts:
+        rend = [font.render(tx, True, col) for tx, col in parts]
+        gap = font.get_height() * 2
+        x = sw // 2 - (sum(r.get_width() for r in rend) + gap * (len(rend) - 1)) // 2
+        for r in rend:
+            screen.blit(r, (x, 8)); x += r.get_width() + gap
     ft = state.get("flight_time")
     if ft:
         t = font.render(ft, True, (230, 230, 230))
@@ -334,17 +382,26 @@ def main():
         print("[map] could not subscribe to the drone pose; using the pilot's state file")
     print(f"Camera: {topic}")
 
+    # Monitor placement (displays.json via tools/displays.py; the launcher sets
+    # UAV_CAMERA_GEOM="x y w h"): borderless window covering that monitor.
+    geom = os.environ.get("UAV_CAMERA_GEOM", "").split()
+    if len(geom) == 4:
+        os.environ["SDL_VIDEO_WINDOW_POS"] = f"{geom[0]},{geom[1]}"
     pygame.display.init()
     pygame.font.init()
     pygame.joystick.init()
     pads = {}
-    flags = pygame.FULLSCREEN if "--fullscreen" in sys.argv else pygame.RESIZABLE
-    screen = pygame.display.set_mode((1280, 800), flags)
+    if len(geom) == 4:
+        screen = pygame.display.set_mode((int(geom[2]), int(geom[3])), pygame.NOFRAME)
+    else:
+        flags = pygame.FULLSCREEN if "--fullscreen" in sys.argv else pygame.RESIZABLE
+        screen = pygame.display.set_mode((1280, 800), flags)
     pygame.display.set_caption(WINDOW_TITLE)
     mm = MiniMap(world) if world else None
     overlay, overlay_size, status_font, end_font, block_n = None, None, None, None, None
     state, state_t = {}, 0.0
     clock = pygame.time.Clock()
+    jsd, js_on, js_retry, js_prev = None, False, 0.0, (0, 0, 0)
     running = True
     while running:
         for ev in pygame.event.get():
@@ -354,14 +411,29 @@ def main():
                 j = pygame.joystick.Joystick(ev.device_index); j.init(); pads[j.get_instance_id()] = j
             elif ev.type == getattr(pygame, "JOYDEVICEREMOVED", -1):
                 pads.pop(ev.instance_id, None)
-            elif ev.type == pygame.JOYBUTTONDOWN and mm:
+            elif ev.type == pygame.JOYBUTTONDOWN and mm and not js_on:
                 if ev.button == DPAD_UP:
                     mm.zoom(-1)
                 elif ev.button == DPAD_DOWN:
                     mm.zoom(+1)
-            elif ev.type == pygame.JOYHATMOTION and mm and ev.value[1] != 0:   # pads that report the D-pad as a hat
+            elif ev.type == pygame.JOYHATMOTION and mm and ev.value[1] != 0 and not js_on:   # pads that report the D-pad as a hat
                 mm.zoom(-1 if ev.value[1] > 0 else +1)
         now = time.time()
+        # D-pad zoom read from /dev/input/js* so it works whatever window has focus
+        if js_joystick is not None and os.environ.get("UAV_JOY_BACKEND", "js") == "js":
+            if (jsd is None or not jsd.get_init()) and now >= js_retry:
+                js_retry = now + 1.0
+                jsd = js_joystick.open_first()
+                js_prev = (0, 0, 0)
+            js_on = jsd is not None and jsd.get_init()
+            if js_on and mm:
+                hy = jsd.get_hat(0)[1] if jsd.get_numhats() else 0
+                cur = (jsd.get_button(DPAD_UP), jsd.get_button(DPAD_DOWN), hy)
+                if (cur[0] and not js_prev[0]) or (cur[2] > 0 and js_prev[2] <= 0):
+                    mm.zoom(-1)
+                if (cur[1] and not js_prev[1]) or (cur[2] < 0 and js_prev[2] >= 0):
+                    mm.zoom(+1)
+                js_prev = cur
         if now - state_t > 0.25:
             state, state_t = read_state(), now
         with latest.lock:
