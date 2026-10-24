@@ -22,11 +22,12 @@
   "gate": {
     "warn_pct": 15.0,
     "reserve_pct": 15.0,
-    "reserve_pct_per_100m": 1.0,
+    "reserve_pct_per_100m": 0.6,
     "reserve_slow_ms": 2.0,
-    "return_pct": null,
+    "return_pct": 10.0,
     "depleted_action": "land_in_place",
-    "_note": "Ben 23 Oct: warning at 15 %. Below 15 % the battery drains 1 % per 100 m flown (reserve = 1.5 km); hovering/slow flight (< 2 m/s) keeps draining at the model rate. No forced return. At 0 %: land in place, block ends (crash/damage once G-series exists)."
+    "_note": "Ben 24 Oct 17:32: low 15 % (warning; the agent always returns home when it is flying), critical 10 % (forced return home for everyone, block ends; the battery cannot fall below 1 % during that return so it always gets home), emergency 5 % (land in place). Below 15 % the battery drains 0.6 % per 100 m flown (10 % = about 1.7 km). BASELINE (training): warnings only, no forced return/landing, flight continues at 0 %. Earlier: 1 %/100 m, no forced return.",
+    "emergency_pct": 5.0
   },
   "wind_ned_ms": [
     0.0,

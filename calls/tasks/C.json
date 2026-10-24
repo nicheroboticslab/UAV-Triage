@@ -36,25 +36,7 @@
  "tasks": [
   {
    "id": "T01",
-   "t_s": 37,
-   "expire_s": 60,
-   "kind": "ACK",
-   "call": null,
-   "route_pos": null,
-   "text": "Dispatch: a news helicopter is in the area, stay clear. Acknowledge.",
-   "fields": [
-    {
-     "name": "ack",
-     "type": "choice",
-     "options": [
-      "Acknowledged"
-     ]
-    }
-   ]
-  },
-  {
-   "id": "T02",
-   "t_s": 95,
+   "t_s": 30,
    "expire_s": 60,
    "kind": "DISTANCE",
    "call": "C3",
@@ -74,13 +56,13 @@
    ]
   },
   {
-   "id": "T03",
-   "t_s": 143,
+   "id": "T02",
+   "t_s": 54,
    "expire_s": 60,
    "kind": "ACK",
-   "call": "C1",
-   "route_pos": 5,
-   "text": "Dispatch: Engine 7 is responding to C1. Acknowledge.",
+   "call": null,
+   "route_pos": null,
+   "text": "Dispatch: a news helicopter is in the area, stay clear. Acknowledge.",
    "fields": [
     {
      "name": "ack",
@@ -92,13 +74,13 @@
    ]
   },
   {
-   "id": "T04",
-   "t_s": 199,
+   "id": "T03",
+   "t_s": 83,
    "expire_s": 60,
-   "kind": "BOAT",
+   "kind": "NEAREST",
    "call": null,
    "route_pos": null,
-   "text": "Incident command has one boat team. Which of the calls you have reported should it go to first?",
+   "text": "Incident command: which call location are you closest to right now?",
    "fields": [
     {
      "name": "call",
@@ -108,55 +90,14 @@
       "C2",
       "C3",
       "C4",
-      "C5",
-      "No call needs a boat"
+      "C5"
      ]
     }
    ]
   },
   {
-   "id": "T05",
-   "t_s": 234,
-   "expire_s": 60,
-   "kind": "DISTANCE",
-   "call": "C1",
-   "route_pos": 5,
-   "text": "Swift-water team at home base: how far is C1 from home base?",
-   "fields": [
-    {
-     "name": "band",
-     "type": "choice",
-     "options": [
-      "Under 300 m",
-      "300-600 m",
-      "600-900 m",
-      "Over 900 m"
-     ]
-    }
-   ]
-  },
-  {
-   "id": "T06",
-   "t_s": 284,
-   "expire_s": 60,
-   "kind": "NOFLY_LINE",
-   "call": "C1",
-   "route_pos": 5,
-   "text": "Air operations: is a no-fly zone on the straight line between you and C1?",
-   "fields": [
-    {
-     "name": "nofly",
-     "type": "choice",
-     "options": [
-      "Yes",
-      "No"
-     ]
-    }
-   ]
-  },
-  {
-   "id": "T07",
-   "t_s": 327,
+   "id": "T04",
+   "t_s": 112,
    "expire_s": 60,
    "kind": "HOME_BEARING",
    "call": null,
@@ -180,8 +121,51 @@
    ]
   },
   {
-   "id": "T08",
-   "t_s": 379,
+   "id": "T05",
+   "t_s": 156,
+   "expire_s": 60,
+   "kind": "ACK",
+   "call": "C1",
+   "route_pos": 5,
+   "text": "Dispatch: incident command moved to the parking structure. Acknowledge.",
+   "fields": [
+    {
+     "name": "ack",
+     "type": "choice",
+     "options": [
+      "Acknowledged"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "T06",
+   "t_s": 186,
+   "expire_s": 60,
+   "kind": "HOME_BEARING",
+   "call": null,
+   "route_pos": null,
+   "text": "Ground crew: in which direction is home base from your position?",
+   "fields": [
+    {
+     "name": "bearing",
+     "type": "choice",
+     "options": [
+      "N",
+      "NE",
+      "E",
+      "SE",
+      "S",
+      "SW",
+      "W",
+      "NW"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "T07",
+   "t_s": 211,
    "expire_s": 60,
    "kind": "STATUS",
    "call": null,
@@ -205,8 +189,8 @@
    ]
   },
   {
-   "id": "T09",
-   "t_s": 424,
+   "id": "T08",
+   "t_s": 239,
    "expire_s": 60,
    "kind": "NEAREST",
    "call": null,
@@ -227,8 +211,31 @@
    ]
   },
   {
+   "id": "T09",
+   "t_s": 267,
+   "expire_s": 60,
+   "kind": "BOAT",
+   "call": null,
+   "route_pos": null,
+   "text": "Incident command has one boat team. Which of the calls you have reported should it go to first?",
+   "fields": [
+    {
+     "name": "call",
+     "type": "choice",
+     "options": [
+      "C1",
+      "C2",
+      "C3",
+      "C4",
+      "C5",
+      "No call needs a boat"
+     ]
+    }
+   ]
+  },
+  {
    "id": "T10",
-   "t_s": 489,
+   "t_s": 299,
    "expire_s": 60,
    "kind": "STATUS",
    "call": null,
@@ -253,66 +260,7 @@
   },
   {
    "id": "T11",
-   "t_s": 524,
-   "expire_s": 60,
-   "kind": "NEAREST",
-   "call": null,
-   "route_pos": null,
-   "text": "Incident command: which call location are you closest to right now?",
-   "fields": [
-    {
-     "name": "call",
-     "type": "choice",
-     "options": [
-      "C1",
-      "C2",
-      "C3",
-      "C4",
-      "C5"
-     ]
-    }
-   ]
-  },
-  {
-   "id": "T12",
-   "t_s": 566,
-   "expire_s": 60,
-   "kind": "ACK",
-   "call": "C5",
-   "route_pos": 3,
-   "text": "Dispatch: water rescue requested near C5. Acknowledge.",
-   "fields": [
-    {
-     "name": "ack",
-     "type": "choice",
-     "options": [
-      "Acknowledged"
-     ]
-    }
-   ]
-  },
-  {
-   "id": "T13",
-   "t_s": 630,
-   "expire_s": 60,
-   "kind": "NOFLY_LINE",
-   "call": "C5",
-   "route_pos": 3,
-   "text": "Air operations: is a no-fly zone on the straight line between you and C5?",
-   "fields": [
-    {
-     "name": "nofly",
-     "type": "choice",
-     "options": [
-      "Yes",
-      "No"
-     ]
-    }
-   ]
-  },
-  {
-   "id": "T14",
-   "t_s": 667,
+   "t_s": 337,
    "expire_s": 60,
    "kind": "HOME_BEARING",
    "call": null,
@@ -336,8 +284,70 @@
    ]
   },
   {
+   "id": "T12",
+   "t_s": 359,
+   "expire_s": 60,
+   "kind": "NOFLY_LINE",
+   "call": "C1",
+   "route_pos": 5,
+   "text": "Air operations: is a no-fly zone on the straight line between you and C1?",
+   "fields": [
+    {
+     "name": "nofly",
+     "type": "choice",
+     "options": [
+      "Yes",
+      "No"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "T13",
+   "t_s": 396,
+   "expire_s": 60,
+   "kind": "DISTANCE",
+   "call": "C1",
+   "route_pos": 5,
+   "text": "Swift-water team at home base: how far is C1 from home base?",
+   "fields": [
+    {
+     "name": "band",
+     "type": "choice",
+     "options": [
+      "Under 300 m",
+      "300-600 m",
+      "600-900 m",
+      "Over 900 m"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "T14",
+   "t_s": 424,
+   "expire_s": 60,
+   "kind": "NEAREST",
+   "call": null,
+   "route_pos": null,
+   "text": "Incident command: which call location are you closest to right now?",
+   "fields": [
+    {
+     "name": "call",
+     "type": "choice",
+     "options": [
+      "C1",
+      "C2",
+      "C3",
+      "C4",
+      "C5"
+     ]
+    }
+   ]
+  },
+  {
    "id": "T15",
-   "t_s": 708,
+   "t_s": 456,
    "expire_s": 60,
    "kind": "BOAT",
    "call": null,
@@ -360,7 +370,26 @@
   },
   {
    "id": "T16",
-   "t_s": 757,
+   "t_s": 486,
+   "expire_s": 60,
+   "kind": "NOFLY_LINE",
+   "call": "C5",
+   "route_pos": 3,
+   "text": "Air operations: is a no-fly zone on the straight line between you and C5?",
+   "fields": [
+    {
+     "name": "nofly",
+     "type": "choice",
+     "options": [
+      "Yes",
+      "No"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "T17",
+   "t_s": 513,
    "expire_s": 60,
    "kind": "STATUS",
    "call": null,
@@ -380,6 +409,67 @@
      "type": "number",
      "min": 0,
      "max": 100
+    }
+   ]
+  },
+  {
+   "id": "T18",
+   "t_s": 543,
+   "expire_s": 60,
+   "kind": "ACK",
+   "call": "C5",
+   "route_pos": 3,
+   "text": "Dispatch: Engine 7 is responding to C5. Acknowledge.",
+   "fields": [
+    {
+     "name": "ack",
+     "type": "choice",
+     "options": [
+      "Acknowledged"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "T19",
+   "t_s": 575,
+   "expire_s": 60,
+   "kind": "STATUS",
+   "call": null,
+   "route_pos": null,
+   "text": "Incident command: report your vehicle status.",
+   "fields": [
+    {
+     "name": "battery_pct",
+     "label": "Battery %",
+     "type": "number",
+     "min": 0,
+     "max": 100
+    },
+    {
+     "name": "condition_pct",
+     "label": "Condition %",
+     "type": "number",
+     "min": 0,
+     "max": 100
+    }
+   ]
+  },
+  {
+   "id": "T20",
+   "t_s": 604,
+   "expire_s": 60,
+   "kind": "ACK",
+   "call": "C4",
+   "route_pos": 2,
+   "text": "Dispatch: water rescue requested near C4. Acknowledge.",
+   "fields": [
+    {
+     "name": "ack",
+     "type": "choice",
+     "options": [
+      "Acknowledged"
+     ]
     }
    ]
   }

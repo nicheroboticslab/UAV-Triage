@@ -36,7 +36,8 @@ DEFAULTS = {
     "cruise_ms": 14.0,
     "rank_weights": {"1": 5.0, "2": 4.0, "3": 3.0, "4": 2.0, "5": 1.0},
     "half_life_s": 300.0,        # value of reaching a call halves every 5 min
-    "hold_est_s": 45.0,          # expected hold per call for the report (decisions log 6.5)
+    "hold_est_s": 20.0,          # expected hold per call for the report (decisions log 6.5)
+    "hold_for_report": False,    # Ben 24 Oct: do not wait at a call for the operator's report
     "max_hold_s": 120.0,         # agent waits at most this long for the report, then moves on
     "min_hold_s": 5.0,           # call already reported when the agent arrives: brief look, then go
     "return_margin_pct": 3.0,    # battery kept on top of the cost to fly home

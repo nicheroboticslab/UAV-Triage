@@ -108,7 +108,10 @@ class BatterySystem:
         self.battery = Battery(cfg)
         g = cfg["gate"]
         self.warn_pct = g["warn_pct"]
-        self.return_pct = g.get("return_pct")              # None: no forced return (Ben, 23 Oct)
+        self.return_pct = g.get("return_pct")              # critical: forced return home (Ben, 24 Oct: 10 %)
+        self.emergency_pct = g.get("emergency_pct")        # emergency: land in place (Ben, 24 Oct: 5 %)
+        self.emergency_reached = False
+        self.floor_pct = None                              # set during a forced return: never below this
         # Reserve (Ben, 23 Oct): below reserve_pct the battery drains by distance,
         # reserve_pct_per_100m per 100 m flown; below reserve_slow_ms (hover, slow
         # flight) it keeps draining at the power-model rate. 0 % -> 'depleted'.
@@ -137,6 +140,10 @@ class BatterySystem:
             v, i = self.battery.step(p, dt)
         self.last = {"power_w": p, "airspeed_ms": V, "voltage_v": v, "current_a": i,
                      "reserve": self.in_reserve}
+        if self.floor_pct is not None and self.battery.pct < self.floor_pct:
+            b = self.battery                                # forced return home: keep the floor
+            b.drawn_ah = b.q_ah * (1.0 - self.floor_pct / 100.0)
+            b.drawn_wh = b.energy_wh * (1.0 - self.floor_pct / 100.0)
         events = []
         pct = self.battery.pct
         if not self.warned and pct <= self.warn_pct:
@@ -148,6 +155,9 @@ class BatterySystem:
         if self.return_pct is not None and not self.gate_reached and pct <= self.return_pct:
             self.gate_reached = True
             events.append("gate")
+        if self.emergency_pct is not None and not self.emergency_reached and pct <= self.emergency_pct:
+            self.emergency_reached = True
+            events.append("emergency")
         if not self.depleted and pct <= 0.0:
             self.depleted = True
             events.append("depleted")
