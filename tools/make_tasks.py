@@ -51,6 +51,62 @@ DIST_BANDS = [[0, 300, "Under 300 m"], [300, 600, "300-600 m"], [600, 900, "600-
 COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
 
 
+ACK_POOL = [
+    "Dispatch: a second ambulance is staging at home base. Acknowledge.",
+    "Dispatch: utility crews are cutting power near {call}. Acknowledge.",
+    "Dispatch: Red Cross shelter opened at the fieldhouse. Acknowledge.",
+    "Dispatch: a boat team is launching upstream of {call}. Acknowledge.",
+    "Dispatch: road closures expanded around {call}. Acknowledge.",
+    "Dispatch: National Weather Service extended the flash flood warning. Acknowledge.",
+    "Dispatch: Engine 7 is responding to {call}. Acknowledge.",
+    "Dispatch: a news helicopter is in the area, stay clear. Acknowledge.",
+    "Dispatch: water rescue requested near {call}. Acknowledge.",
+    "Dispatch: incident command moved to the parking structure. Acknowledge.",
+    "Dispatch: police checking vehicles near {call}. Acknowledge.",
+    "Dispatch: rain intensity increasing over the next hour. Acknowledge.",
+    "Dispatch: medical team en route to home base. Acknowledge.",
+    "Dispatch: dam operators report rising levels near {call}. Acknowledge.",
+    "Dispatch: shift change at dispatch in 10 minutes. Acknowledge.",
+]
+
+
+def schedule_for(set_id):
+    """BASELINE keeps the original schedule. A-E (Ben, 24 Oct): same counts of every
+    request type, but their own order, times (+-15 s jitter, >= 35 s apart), route
+    positions and notice texts, so the sequence cannot be learned across blocks.
+    Deterministic (seeded by set id)."""
+    if set_id == "BASELINE":
+        return SCHEDULE, ACK_TEXT
+    import random
+    rnd = random.Random("egle-tasks-" + set_id)
+    kinds = [k for _, k, _ in SCHEDULE]
+    for _ in range(10000):                    # no request type twice in a row
+        rnd.shuffle(kinds)
+        if all(kinds[i] != kinds[i + 1] for i in range(len(kinds) - 1)):
+            break
+    times, t = [], None
+    for base, _, _ in SCHEDULE:
+        x = base + rnd.randint(-15, 15)
+        if t is not None and x < t + 35:
+            x = t + 35
+        times.append(x)
+        t = x
+    pos = {"NOFLY_LINE": rnd.sample(range(1, 6), 2), "DISTANCE": rnd.sample(range(1, 6), 2),
+           "ACK": [None] + rnd.sample(range(1, 6), 2)}
+    used = {k: 0 for k in pos}
+    sched = []
+    for tm, k in zip(times, kinds):
+        rp = None
+        if k in pos:
+            rp = pos[k][used[k]]
+            used[k] += 1
+        sched.append((tm, k, rp))
+    idx = "ABCDE".index(set_id)
+    texts = [ACK_POOL[(3 * idx + j) % len(ACK_POOL)] for j in range(3)]
+    texts = sorted(texts, key=lambda x: "{call}" in x)        # first notice has no call reference
+    return sched, texts
+
+
 def build(set_id):
     cs = json.load(open(os.path.join(REPO, "calls", "sets", f"{set_id}.json")))
     by_loc = {c["location"]: c["call_id"] for c in cs["calls"]}
@@ -58,12 +114,13 @@ def build(set_id):
     route_calls = [by_loc[L] for L in order]
     call_ids = sorted(by_loc.values())
     tasks, n_ack = [], 0
-    for i, (t, kind, rp) in enumerate(SCHEDULE):
+    sched, ack_text = schedule_for(set_id)
+    for i, (t, kind, rp) in enumerate(sched):
         call = route_calls[rp - 1] if rp else None
         task = {"id": f"T{i + 1:02d}", "t_s": t, "expire_s": EXPIRE_S, "kind": kind, "call": call,
                 "route_pos": rp}
         if kind == "ACK":
-            task["text"] = ACK_TEXT[n_ack % len(ACK_TEXT)].format(call=call)
+            task["text"] = ack_text[n_ack % len(ack_text)].format(call=call)
             task["fields"] = [{"name": "ack", "type": "choice", "options": ["Acknowledged"]}]
             n_ack += 1
         elif kind == "STATUS":

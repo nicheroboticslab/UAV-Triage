@@ -8,11 +8,11 @@
   ],
   "episode_min_s": 1.0,
   "block": {
-    "participant": null,
-    "sequence": null,
-    "block": null,
-    "condition": "test",
-    "call_set": "C",
+    "participant": "P01",
+    "sequence": 5,
+    "block": 1,
+    "condition": "baseline",
+    "call_set": "BASELINE",
     "tau_s": null
   }
 }

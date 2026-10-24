@@ -29,6 +29,7 @@ from inaction_log import InactionLog
 from battery_model import BatterySystem, load_config as load_battery_config
 from hazards import ConditionMonitor, load_config as load_condition_config
 from agent_planner import Planner, load_config as load_agent_config
+from log_time import stamped
 import flood_prompt
 from px4_battery_display import PX4BatteryDisplay
 import call_sets
@@ -301,6 +302,8 @@ class DatasetCollector:
 
     def _append(self, record):
         try:
+            st = stamped(record)            # wall / wall_iso / mono_ns first; kept by later rewrites
+            record.clear(); record.update(st)
             with open(self.filepath, 'a') as f:
                 f.write(json.dumps(record) + "\n")
         except Exception as e:
@@ -448,8 +451,8 @@ class UAVAutonomousNode(Node):
             DATASET_DIR, f"battery_{datetime.fromtimestamp(self.flight_start_time).strftime('%Y%m%d_%H%M%S')}.jsonl")
         self.batt_log_every = max(1, int(round(1.0 / (CONTROL_DT_S * BATT_CFG.get("log_hz", 2.0)))))
         with open(self.batt_log_path, "a") as f:
-            f.write(json.dumps({"type": "config", "battery_file": BATT_CFG_PATH, "config": BATT_CFG,
-                                "timer_period_s": CONTROL_DT_S}) + "\n")
+            f.write(json.dumps(stamped({"type": "config", "battery_file": BATT_CFG_PATH, "config": BATT_CFG,
+                                        "timer_period_s": CONTROL_DT_S})) + "\n")
 
         # D2: QGC shows PX4's simulated battery; make it follow the model.
         self.home_roof_m = HOME_ROOF_M   # controller_input: altitude floor above the ground
@@ -534,6 +537,16 @@ class UAVAutonomousNode(Node):
         ts        = f"[T+{mins}m{secs:02d}s]" if mins > 0 else f"[T+{secs}s]"
         entry     = f"{ts} {msg}"
         self.event_log.append(entry)
+        # every event also goes to events_<run>.jsonl with full time stamps
+        try:
+            if not hasattr(self, "_events_path"):
+                self._events_path = os.path.join(
+                    DATASET_DIR, f"events_{datetime.fromtimestamp(self.flight_start_time).strftime('%Y%m%d_%H%M%S')}.jsonl")
+            with open(self._events_path, "a") as f:
+                f.write(json.dumps(stamped({"t_s": round(elapsed, 3), "event": msg,
+                                            "state": getattr(getattr(self, "drone_state", None), "value", None)})) + "\n")
+        except Exception:
+            pass
         if len(self.event_log) > EVENT_LOG_MAX_ENTRIES:
             self.event_log.pop(0)
         self.get_logger().info(f"[LOG] {entry}")
@@ -600,7 +613,7 @@ class UAVAutonomousNode(Node):
                    "state": self.drone_state.value, "egle_state": self._egle_state()}
             try:
                 with open(self.batt_log_path, "a") as f:
-                    f.write(json.dumps(rec) + "\n")
+                    f.write(json.dumps(stamped(rec)) + "\n")
             except Exception:
                 pass
 
@@ -717,7 +730,7 @@ class UAVAutonomousNode(Node):
 
     def _cond_write(self, rec):
         try:
-            rec = {"t_s": round(time.time() - self.flight_start_time, 3), **rec}
+            rec = stamped({"t_s": round(time.time() - self.flight_start_time, 3), **rec})
             with open(self.cond_log_path, "a") as f:
                 f.write(json.dumps(rec) + "\n")
         except Exception:

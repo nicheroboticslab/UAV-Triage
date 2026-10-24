@@ -10,6 +10,8 @@ Zones cover all altitudes. Position is local NED metres from home, the same
 frame as MAP and self.current_pos.
 """
 import json
+
+from log_time import stamped
 import math
 import os
 import time
@@ -84,7 +86,7 @@ class NoFlyMonitor:
 
     def _write(self, rec):
         with open(self.out_path, "a") as f:
-            f.write(json.dumps(rec) + "\n")
+            f.write(json.dumps(stamped(rec)) + "\n")
 
     def update(self, pos, state, t_mission, waypoint=None):
         """Call every loop cycle. pos = [north, east, down] metres."""

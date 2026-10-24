@@ -14,5 +14,8 @@
   "min_hold_s": 5.0,
   "return_margin_pct": 3.0,
   "arrive_radius_m": 25.0,
-  "hold_radius_m": 150.0
+  "hold_radius_m": 150.0,
+  "leg_climb_m": 35.0,
+  "climb_ms": 5.0,
+  "descent_ms": 4.0
 }

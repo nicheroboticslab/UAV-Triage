@@ -174,11 +174,19 @@ class ConditionMonitor:
         line is clear. A zone that already contains start (or goal) is ignored for
         edges leaving start (entering goal), so the vehicle can always get out."""
         m = self.cfg["agent_nofly_margin_m"]
-        zs = [(z["east_m"], z["north_m"], z["radius_m"] + m) for z in self.zones]
+        zs = []
+        for z in self.zones:
+            cx, cy, r = z["east_m"], z["north_m"], z["radius_m"]
+            # margin shrinks where a call (or the vehicle) is closer than radius + margin,
+            # so a call next to a zone stays reachable without entering the zone itself
+            near = min(math.hypot(start[0] - cx, start[1] - cy), math.hypot(goal[0] - cx, goal[1] - cy))
+            zs.append((cx, cy, max(r + 1.0, min(r + m, near - 2.0))))
         if not zs:
             return []
-        inside_s = {i for i, (cx, cy, R) in enumerate(zs) if math.hypot(start[0] - cx, start[1] - cy) < R}
-        inside_g = {i for i, (cx, cy, R) in enumerate(zs) if math.hypot(goal[0] - cx, goal[1] - cy) < R}
+        inside_s = {i for i, z in enumerate(self.zones)
+                    if math.hypot(start[0] - z["east_m"], start[1] - z["north_m"]) < z["radius_m"] + 1.0}
+        inside_g = {i for i, z in enumerate(self.zones)
+                    if math.hypot(goal[0] - z["east_m"], goal[1] - z["north_m"]) < z["radius_m"] + 1.0}
 
         def free(a, b, skip=()):
             for i, (cx, cy, R) in enumerate(zs):

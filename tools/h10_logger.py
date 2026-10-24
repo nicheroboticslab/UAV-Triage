@@ -79,8 +79,10 @@ class Recorder:
         self.write({"type": "config", **header})
 
     def write(self, rec):
-        rec.setdefault("wall", time.time())
-        rec.setdefault("mono_ns", time.monotonic_ns())
+        w = time.time()
+        rec = {"wall": rec.pop("wall", w),
+               "wall_iso": datetime.fromtimestamp(w).astimezone().isoformat(timespec="milliseconds"),
+               "mono_ns": rec.pop("mono_ns", time.monotonic_ns()), **rec}
         self.f.write(json.dumps(rec) + "\n")
 
     def marker(self, event, **kw):

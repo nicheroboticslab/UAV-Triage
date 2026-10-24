@@ -45,8 +45,10 @@ os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 import pygame
 try:
     from . import js_joystick
+    from .log_time import stamped
 except ImportError:                 # run as a script / imported without the package
     import js_joystick
+    from log_time import stamped
 
 # Input backend (Ben, 24 Oct): read the controller from /dev/input/js* directly, so it
 # works whatever window has focus. UAV_JOY_BACKEND=sdl falls back to pygame/SDL.
@@ -342,7 +344,7 @@ class ControllerInput:
                    "gimbal_pitch_deg": round(n.gimbal_cmd[0], 2), "gimbal_yaw_deg": round(n.gimbal_cmd[1], 2),
                    "pos_ned": [round(float(v), 2) for v in n.current_pos] if hasattr(n, "current_pos") else None}
             with open(self._log_path, "a") as f:
-                f.write(json.dumps(rec) + "\n")
+                f.write(json.dumps(stamped(rec)) + "\n")
         except Exception as e:
             self._log(f"[CONTROLLER] log error: {e!r}")
 
