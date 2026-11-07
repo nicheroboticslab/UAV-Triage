@@ -1,5 +1,5 @@
 {
-  "_help": "Agent routing and hold settings (agent_planner.py, F2/G3; Ben 24 Oct). Value of a call = rank weight x 0.5^(arrival time / half_life_s). Proposed values; confirm in Experiment Design.",
+  "_help": "Agent routing and hold settings (agent_planner.py, F2/G3; Ben 24 Oct). Value of a call = rank weight x 0.5^(arrival time / half_life_s). Proposed values; confirm in Experiment Design. 24 Oct 16:50 (Ben): hold_for_report off - the agent hovers DWELL_TIME (20 s) over a call, then continues even if no report has been filed.",
   "cruise_ms": 14.0,
   "rank_weights": {
     "1": 5.0,
@@ -9,7 +9,7 @@
     "5": 1.0
   },
   "half_life_s": 300.0,
-  "hold_est_s": 45.0,
+  "hold_est_s": 20.0,
   "max_hold_s": 120.0,
   "min_hold_s": 5.0,
   "return_margin_pct": 3.0,
@@ -17,5 +17,6 @@
   "hold_radius_m": 150.0,
   "leg_climb_m": 35.0,
   "climb_ms": 5.0,
-  "descent_ms": 4.0
+  "descent_ms": 4.0,
+  "hold_for_report": false
 }
