@@ -54,6 +54,43 @@ STATE_FILE = "/tmp/uav_dashboard_state.json"
 PORTAL_STATE_FILE = "/tmp/uav_portal_state.json"
 PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "report_portal.html")
 REPORT_RADIUS_M = 150.0
+# Ben 24 Oct: a tone when a new request appears, different from the takeover tone
+# (single 880 Hz, 0.35 s): two short rising beeps 660 Hz + 990 Hz. UAV_TASK_TONE=0 disables.
+TASK_TONE = os.environ.get("UAV_TASK_TONE", "1") != "0"
+TASK_TONE_FILE = "/tmp/uav_task_tone.wav"
+
+
+def _make_task_tone():
+    import struct
+    import wave
+    rate, out = 44100, []
+    for f, dur in ((660.0, 0.12), (0.0, 0.06), (990.0, 0.12)):
+        n = int(rate * dur)
+        for i in range(n):
+            fade = min(1.0, i / (0.01 * rate), (n - i) / (0.01 * rate))
+            v = 0.0 if f == 0.0 else 0.3 * fade * math.sin(2 * math.pi * f * i / rate)
+            out.append(int(v * 32767))
+    with wave.open(TASK_TONE_FILE, "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate)
+        w.writeframes(struct.pack("<%dh" % len(out), *out))
+
+
+def play_task_tone():
+    if not TASK_TONE:
+        return None
+    import subprocess
+    try:
+        if not os.path.exists(TASK_TONE_FILE):
+            _make_task_tone()
+        for player in ("paplay", "aplay"):
+            try:
+                subprocess.Popen([player, TASK_TONE_FILE], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return player
+            except FileNotFoundError:
+                continue
+    except Exception:
+        pass
+    return None
 PORT = int(sys.argv[sys.argv.index("--port") + 1]) if "--port" in sys.argv else 8765
 
 INTENT_LABEL = {"HOLD_SAFE": "Hold position", "CONTINUE_ASSIGNED_TASK": "Continue current call",
@@ -178,8 +215,9 @@ class Portal:
                 self._w(self.f_task, {"type": "not_shown", "task": task["id"], "reason": "portal_not_running"})
             elif st is None and t >= task["t_s"]:
                 self.task_status[task["id"]] = "shown"
+                player = play_task_tone()
                 self._w(self.f_task, {"type": "shown", "task": task["id"], "kind": task["kind"],
-                                      "snapshot": self.snapshot()})
+                                      "tone": player, "snapshot": self.snapshot()})
             elif st == "shown" and (t >= task["t_s"] + task["expire_s"] or self.ended()):
                 self.task_status[task["id"]] = "expired"
                 self._w(self.f_task, {"type": "expired", "task": task["id"],
@@ -222,7 +260,9 @@ class Portal:
             active = self.locked_call or (nearest[0] if nearest else None)
             eg = s.get("egle_state")
             fresh = time.time() - s.get("timestamp", 0) < 5
-            phase = "waiting" if not self.t0 or not fresh else ("ended" if self.ended() else "flying")
+            # Ben 24 Oct: the portal stays usable after the block ends (battery out etc.) so
+            # reports can be finished; only the camera window shows the block-end screen.
+            phase = "waiting" if not self.t0 or not fresh else "flying"
             intent = INTENT_LABEL.get(s.get("current_intent") or "", "") if eg == "AUTONOMOUS" else ""
             wp = s.get("current_wp")
             return {
@@ -233,7 +273,7 @@ class Portal:
                            "battery_pct": s.get("battery_pct"), "battery_low": s.get("battery_low"),
                            "condition_pct": s.get("condition_pct"), "nofly_zone": s.get("nofly_zone"),
                            "flight_time": s.get("flight_time")},
-                "block": self.cfg["session"].get("block"),
+                "block": self.cfg["session"].get("block"), "block_ended": self.ended(),
                 "calls": calls, "active_call": active, "locked": bool(self.locked_call),
                 "report_radius_m": REPORT_RADIUS_M, "fields": FIELDS,
                 "tasks": self.pending(),

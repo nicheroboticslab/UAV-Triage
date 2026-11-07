@@ -125,7 +125,7 @@ function renderStatus(s) {
     c.textContent = `Condition ${Math.round(s.condition_pct)} %` + (s.nofly_zone ? "  · IN NO-FLY ZONE" : "");
     c.className = "meter" + ((s.nofly_zone || s.condition_pct <= 25) ? " bad" : (s.condition_pct <= 60 ? " warn" : ""));
   }
-  document.getElementById("ftime").textContent = s.flight_time || "";
+  document.getElementById("ftime").textContent = (V && V.block_ended) ? "Block ended - finish your reports" : (s.flight_time || "");
 }
 
 // ---------------------------------------------------------------- calls

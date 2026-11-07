@@ -194,7 +194,10 @@ class ControllerInput:
                 n.loitering = False
             n.manual_yaw = start_yaw
             cur = list(n.current_pos)
-            n.target_pos[0], n.target_pos[1], n.target_pos[2] = cur[0], cur[1], cur[2]
+            n.target_pos[0], n.target_pos[1] = cur[0], cur[1]
+            # auto-launch (Ben 24 Oct): before control is live keep the 5 m launch height
+            live = getattr(n, "_control_live", lambda: True)()
+            n.target_pos[2] = cur[2] if live else min(cur[2], n.target_pos[2])
             self._v = [0.0, 0.0]
             self._vz = 0.0
             self._burst = True
@@ -275,7 +278,17 @@ class ControllerInput:
         else:
             self._back_since = None
         if getattr(self.node, "block_ended", False):
-            return buttons                         # block over: ignore all other input
+            # Ben 24 Oct 19:12: any stick, trigger or button takes control back from an
+            # agent battery return / landing (never forced on the operator).
+            reclaim = getattr(self.node, "can_reclaim", lambda: False)()
+            if reclaim:
+                moved = any(shape(self._axis(j, a)) for a in (AX_LEFT_X, AX_LEFT_Y, AX_RIGHT_X, AX_RIGHT_Y))
+                trig = self._trigger(j, AX_RT) > 0.1 or self._trigger(j, AX_LT) > 0.1
+                btn = any(b for i, b in enumerate(buttons) if i != BTN_BACK)
+                reclaim = moved or trig or btn
+            if not reclaim:
+                return buttons                     # block over: ignore all other input
+            self.node.operator_reclaim()
 
         def held(i):
             return i < len(buttons) and bool(buttons[i])
@@ -388,7 +401,10 @@ class ControllerInput:
             n.manual_vel = None
         if hasattr(n, "current_pos") and hasattr(n, "target_pos") and self._in_manual():
             cur = list(n.current_pos)
-            n.target_pos[0], n.target_pos[1], n.target_pos[2] = cur[0], cur[1], cur[2]
+            n.target_pos[0], n.target_pos[1] = cur[0], cur[1]
+            # auto-launch (Ben 24 Oct): before control is live keep the 5 m launch height
+            live = getattr(n, "_control_live", lambda: True)()
+            n.target_pos[2] = cur[2] if live else min(cur[2], n.target_pos[2])
 
     def _stop_session(self):
         """Run tools/stop_session.sh detached: it SIGINTs the pilot (this process),
