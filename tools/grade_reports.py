@@ -79,9 +79,16 @@ def truth_for(meta_path, set_id):
     out = {c["call_id"]: json.loads(json.dumps(c)) for c in (cs or {}).get("calls", [])}
     sid = set_id or (cs or {}).get("set_id")
     try:
-        ov = json.load(open(os.path.join(REPO, "calls", "key_overrides.json"))).get(sid, {})
+        allov = json.load(open(os.path.join(REPO, "calls", "key_overrides.json")))
     except FileNotFoundError:
-        ov = {}
+        allov = {}
+    ov = {}
+    for cid, c in out.items():                   # per scenario code, every set
+        fix = (allov.get("by_scenario") or {}).get(c.get("scenario_code"))
+        if fix:
+            ov[cid] = dict(fix)
+    for cid, fix in (allov.get(sid) or {}).items():   # per set and call (wins)
+        ov.setdefault(cid, {}).update(fix)
     for cid, fix in ov.items():                  # answer-key corrections (calls/key_overrides.json)
         if cid not in out:
             continue

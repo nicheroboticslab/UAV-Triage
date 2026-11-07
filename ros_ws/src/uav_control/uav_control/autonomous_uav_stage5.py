@@ -181,6 +181,7 @@ CONTROL_LIVE_ALT_M           = 2.0    # operator control (and tau) starts above 
 AUTO_LAUNCH_M = 5.0          # Ben 24 Oct: climb to this height above spawn right after ARM
 START_SIGNAL_FILE            = "/tmp/uav_start_signal"   # created by start_gate.py on START
 RETURN_REASONS               = ("emergency_return", "battery_gate", "battery_low_home")
+AGENT_FORCED                 = ("battery_gate", "battery_low_home", "battery_emergency")  # operator can take these back
 TRAINING_SET                 = "BASELINE"   # Ben 24 Oct: no battery-forced end in the training block
 CONTROL_DT_S                 = 0.05   # control loop period (20 Hz)
 
@@ -599,18 +600,20 @@ class UAVAutonomousNode(Node):
             self.log_event(f"Battery reserve ({self.batt.pct:.0f}%): about "
                            f"{self.batt.pct / self.batt.reserve_per_100m * 0.1:.1f} km of flight left.")
         training = CALL_SET_ID == TRAINING_SET
-        if "gate" in events:
-            if training:
-                self.log_event(f"Battery critical ({self.batt.pct:.0f}%) - training block: no forced return.")
-            else:
-                self._battery_gate()
-        if "emergency" in events:
-            if training:
-                self.log_event(f"Battery emergency ({self.batt.pct:.0f}%) - training block: flight continues.")
-            elif self.block_ended and self.block_end_reason in RETURN_REASONS:
-                self.log_event(f"Battery emergency ({self.batt.pct:.0f}%) during the return home - continuing home.")
-            else:
-                self._battery_emergency()
+        # Ben 25 Oct: the agent never takes control from the operator and never ends the
+        # block (no forced return / landing). Critical and emergency only warn; if the agent
+        # is flying it heads home as an ordinary waypoint, which the operator can take back
+        # at any time with any input. The block ends only at 0 % (except BASELINE), at
+        # Condition 0 %, or with the operator's own LB+RB return.
+        agent = (self.drone_state != DroneState.MANUAL and not self.block_ended
+                 and self._control_live())
+        for ev, name in (("gate", "critical"), ("emergency", "emergency")):
+            if ev not in events:
+                continue
+            who = "training block" if training else ("agent flying: heading home" if agent else "operator flying")
+            self.log_event(f"Battery {name} ({self.batt.pct:.0f}%) - {who}. No forced return.")
+            if agent and not training and self.current_wp_name != "BASE":
+                self._agent_head_home()
         if "depleted" in events:
             if training:
                 self.log_event("Battery empty - training block: flight continues.")
@@ -724,7 +727,7 @@ class UAVAutonomousNode(Node):
             g = self.planner.gate((self.current_pos[1], self.current_pos[0]), self.battery_pct)
             if g is None and self.battery_pct <= self.batt.warn_pct and CALL_SET_ID != TRAINING_SET:
                 g = 6                                 # Ben 24 Oct: at battery low the agent always flies home
-            return {7: Intent.ABORT_AND_SAFE, 6: Intent.RETURN_TO_BASE}.get(g)
+            return Intent.RETURN_TO_BASE if g in (6, 7) else None   # Ben 25 Oct: never a forced landing
         if self.battery_pct < BATTERY_CRIT_THRESH:
             return Intent.ABORT_AND_SAFE if self.battery_pct < 5.0 else Intent.RETURN_TO_BASE
         return None
@@ -835,6 +838,41 @@ class UAVAutonomousNode(Node):
             return
         self.get_logger().error(f"[BATT] Critical ({self.batt.pct:.1f}%) → RETURN HOME AND LAND")
         self._return_home("battery_gate")
+
+    def _agent_head_home(self):
+        """Agent in control at low battery: fly home as an ordinary waypoint (no block end)."""
+        wp, name = self._generate_waypoint(Intent.RETURN_TO_BASE)
+        self.current_intent  = Intent.RETURN_TO_BASE
+        self.target_pos      = wp
+        self.current_wp_name = name
+        self.loitering       = False
+        self.dwell_active    = False
+        self.drone_state     = DroneState.AUTO_FLYING
+        self.waypoint_depart_time = time.time()
+
+    def can_reclaim(self):
+        """Ben 24 Oct 19:12: the operator can always take control back from a battery
+        return / landing the agent started. Not after touchdown, not at 0 %."""
+        return (self.block_ended and self.block_end_reason in AGENT_FORCED
+                and not self.block_landed and CALL_SET_ID != TRAINING_SET)
+
+    def operator_reclaim(self):
+        """Stick input during an agent battery return / landing: cancel it, operator flies.
+        The return is applied again the next time the agent is in control."""
+        reason = self.block_end_reason
+        self.block_ended, self.block_end_reason = False, None
+        self._rth_land_sent = False
+        self.batt.floor_pct = None
+        self.send_cmd(176, 1.0, 6.0)               # back to offboard (a LAND may have been sent)
+        self.drone_state    = DroneState.MANUAL
+        self.loitering      = False
+        self.current_intent = None
+        self.dwell_active   = False
+        self._carrot        = None
+        self.target_pos     = list(self.current_pos)
+        self.last_key_time  = time.time()
+        self.log_event(f"Operator took control back from the agent's {reason} "
+                       f"at {self.batt.pct:.0f}% battery. Block continues.")
 
     def emergency_return(self):
         """Operator emergency (gamepad LB+RB): fly home and land. Terminal for the block."""
@@ -1517,6 +1555,8 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
     # =========================================================
 
     def _generate_waypoint(self, intent: Intent):
+        if self.planner is not None and intent == Intent.ABORT_AND_SAFE:
+            intent = Intent.RETURN_TO_BASE              # Ben 25 Oct: agent never lands / ends the block
         def dist3d(pos):
             return math.sqrt(sum((a-b)**2 for a, b in zip(pos, self.current_pos)))
         def safe_alt(z):
@@ -1949,8 +1989,12 @@ Think like an experienced pilot. Respond ONLY with valid JSON:
 
                 if (remaining <= 0 and self.planner is not None and self.current_wp_name == "BASE"
                         and self.battery_pct <= self.batt.warn_pct and CALL_SET_ID != TRAINING_SET):
-                    self._return_home("battery_low_home")   # at home with low battery: land, block ends
-                    return
+                    if not getattr(self, "_base_hold_logged", False):
+                        self._base_hold_logged = True
+                        self.log_event(f"Agent holding over home base at {self.battery_pct:.0f}% battery "
+                                       f"(no landing; operator can take control).")
+                    self.dwell_start = now                  # keep hovering over the pad
+                    remaining = 1.0
                 if remaining <= 0:
                     self.log_event(f"Dwell complete at {self.current_wp_name}. Battery: {self.battery_pct:.1f}%")
                     if self.current_record_id:

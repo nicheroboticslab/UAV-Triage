@@ -1,7 +1,15 @@
 {
- "_help": "Answer-key corrections applied by tools/grade_reports.py on top of the call set's truth (archived run truth stays unchanged; scenes are not affected). set_id -> call_id -> truth fields ('worst' sets condition.worst).",
+ "_help": "Answer-key corrections applied by tools/grade_reports.py on top of the call set's truth (archived run truth stays unchanged; scenes are not affected). 'by_scenario': scenario_code -> truth fields, applied in every set; then set_id -> call_id -> truth fields (wins). 'worst' sets condition.worst.",
  "BASELINE": {
-  "C2": {"water_motion": "None", "water_depth": "None", "_why": "Ben 24 Oct: people on the balcony are not in water"},
-  "C1": {"worst": "immobile_responsive", "_why": "Ben 24 Oct: people clinging on the submerged footbridge are immobile"}
+  "C1": {
+   "worst": "immobile_responsive",
+   "_why": "Ben 24 Oct: people clinging on the submerged footbridge are immobile"
+  }
+ },
+ "by_scenario": {
+  "S2b": {
+   "water_depth": "Chest or deeper",
+   "_why": "Ben 25 Oct: rooftop scenarios are rated deep water"
+  }
  }
 }
